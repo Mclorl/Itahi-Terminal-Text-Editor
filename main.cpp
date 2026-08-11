@@ -311,7 +311,7 @@ int main(void) {
     // --- Help Menu Choices ---
     auto btn_about = ftxui::Button("About Itahi Editor", [&] {
         current_events = "Directing To Itahi Editor Repository.";
-        open_url("https://github.com/Mclorl");
+        open_url("https://github.com/Mclorl/Itahi-Terminal-Text-Editor");
     }, create_plain_button_option());
 
     auto btn_ftxui_about = ftxui::Button("About FTXUI", [&] {
