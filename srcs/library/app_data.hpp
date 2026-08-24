@@ -6,6 +6,8 @@
 
 #define MAX_WIDTH_INPUT_INT_DEFAULT 4
 
+#define MAX_DIGITS_LENGTH_DEFAULT 2
+
 auto create_plain_button_option = []() {};
 
 void open_url(const std::string& url) {

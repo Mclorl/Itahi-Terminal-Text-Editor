@@ -5,20 +5,35 @@
 #include <string>
 #include <vector>
 #include <algorithm>
+#include <filesystem>
+#include <fstream>
 
-#include "./srcs/app_data.hpp"
+#include "app_data.hpp"
+#include "file_system_left_panel.hpp"
+#include "file_entry.hpp"
 
-int main(void) {
+namespace fs = std::filesystem;
+
+int main(int argc, char* argv[]) {
     auto screen = ftxui::ScreenInteractive::Fullscreen();
 
     int tab_selected = 0;      // 1: File, 2: Edit, 3: View, 4: *Terminal, 5: Help, 0 not active
-    int left_panel_width = 20; // Default width of the left panel slider
+    int left_panel_width = 25; // Default width of the left panel slider
+
+    // error catch var
+
+    std::error_code ec;
 
     // data 
-    std::string content = "I love\nYou!!\n\n\n\nasd\n";
+    std::string content;
+
+    std::string current_directory_content;
+    
 
     // mouse sensitivity
     std::string mouse_sensitivity = "3";
+
+    std::string active_file = "";
 
     // status
     int status = 1;
@@ -33,8 +48,26 @@ int main(void) {
     bool underline_active_row_on_numbers = false;
     // bool show_status_bar = true;
 
-    // custom input styling
+    // custom input styling variable.
     int cursor_index = 0;
+
+    // error handling
+    if (ec) {
+        std::cerr << "Failed to retrieve current path: " << ec.message() << std::endl;
+        return 1;
+    }
+
+    if (argc > 1 && !fs::is_regular_file(fs::status(argv[1])) && !fs::is_directory(fs::status(argv[1]))) {
+        std::cerr << std::endl << "There is no such file or directory as " << argv[1] << std::endl << "Abort." << std::endl;
+        return 1;
+    }
+
+    if (argc > 2) {
+        std::cerr << std::endl << "Too much arguments." << std::endl << "Abort." << std::endl;
+        return 1;
+    }
+
+    // custom input styling function.
     auto style_file_content_input_option = [&cursor_index]() { // soon change to have focused customizations like underlined when focused.
         // input, main content
         ftxui::InputOption file_content_input_option_styling;
@@ -100,6 +133,24 @@ int main(void) {
     
     // styling
 
+    // left panel file styling
+
+    auto left_panel_file_styling = []() {
+        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
+
+        option.transform = [](const ftxui::EntryState& current_state) {
+            auto e = ftxui::text(current_state.label);
+            
+            if (current_state.focused) {
+                return ftxui::bold(e);
+            }
+            return e;
+        };
+
+        return option;
+    };
+
+    // numeric input custom
     auto make_numeric_input_row = [](std::string& target_var, std::string label_text, int max_digits_taken, int max_width) {
         ftxui::Component input_comp = ftxui::Input(&target_var, "");
 
@@ -175,6 +226,7 @@ int main(void) {
         return option;
     };
 
+    // text button array
     auto create_text_button = [&](std::string label, int tab_index) {
         ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
         
@@ -223,7 +275,7 @@ int main(void) {
             ),
             ftxui::flex(
                 ftxui::center(
-                    ftxui::bold(ftxui::text("<File Name>"))
+                    ftxui::bold(ftxui::text(active_file.empty() ? "--" : active_file))
                 )
             ),
             ftxui::flex(
@@ -300,11 +352,11 @@ int main(void) {
 
     // --- Settings Menu Choices ---
 
-    auto mouse_sens_row = make_numeric_input_row(mouse_sensitivity, "Mouse Sensitivity: ", 2, MAX_WIDTH_INPUT_INT_DEFAULT);
+    auto mouse_sens_row = make_numeric_input_row(mouse_sensitivity, "Mouse Sensitivity: ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
 
     auto settings_tab_container = ftxui::Container::Vertical({
         mouse_sens_row,
-        // tab_size_row, // Just add more rows down the line
+        // tab_size_row, // Just add more column 
     });
 
 
@@ -327,6 +379,39 @@ int main(void) {
         warning_text_link_direct,
         btn_about,
         btn_ftxui_about,
+    });
+
+    // --- Left Panel ---
+
+    // left panel array.
+    std::vector<ftxui::Component> left_panel_button_file_arr;
+    int iterations = 0;
+
+    // left panel file button function
+
+    std::string target_dir = ".";
+    if (argc > 1 && fs::is_directory(fs::status(argv[1]))) {
+        target_dir = argv[1];
+    } else if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
+        content = readFile(argv[1]);
+    }
+
+    current_directory_content = iterate_current_path_shallow(target_dir);
+
+    std::vector<std::string> file_list;
+    std::stringstream s(current_directory_content);
+    std::string line;
+    while (std::getline(s, line)) {
+        if (!line.empty()) {
+            file_list.push_back(line);
+        }
+    }
+
+    opened_directory_file_entry(left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file);
+
+    auto left_panel_button_file_container = ftxui::Container::Vertical({
+        std::move(left_panel_button_file_arr), 
+        // std::move() casts an object into an rvalue so it does not effect the performance.
     });
 
     auto main_view = ftxui::Renderer(file_content_input, [&file_content_input, &file_content_count_component]{
@@ -372,17 +457,15 @@ int main(void) {
     });
 
     // left panel or file explorer system.
-    auto left_panel = ftxui::Renderer([&] {
+    auto left_panel = ftxui::Renderer(left_panel_button_file_container, [&] {
         return ftxui::border(
             ftxui::vbox({
                 ftxui::bold(
                     ftxui::text("Explorer")
                 ),
                 ftxui::separator(),
-                ftxui::text(" > srcs"),
-                ftxui::text("   app_data.hpp"),
-                ftxui::text("   main.cpp"),
-                ftxui::text(" CMakeLists.txt"),
+                left_panel_button_file_container->Render(),
+                
             })
         );
     });
@@ -437,7 +520,29 @@ int main(void) {
         );
     });
 
-    auto body_split = ftxui::ResizableSplitLeft(left_panel, main_content, &left_panel_width);
+    auto body_split = main_content;
+
+    // if (argc > 1 && fs::is_directory(fs::status(argv[1]))) { // opened the program with a directory argument, open that directory.
+    //     body_split = ftxui::ResizableSplitLeft(left_panel, main_content, &left_panel_width);
+    //     current_directory_content = iterate_current_path_shallow(argv[1]);
+    // } else if (argc == 1) { // if it has no arguments, open the current directory of the user.
+    //     body_split = ftxui::ResizableSplitLeft(left_panel, main_content, &left_panel_width);
+    //     // std::string temp_dir = get_current_path(ec).filename().string() + '/';
+    //     current_directory_content = iterate_current_path_shallow(".");
+    // } else { // if it has an argument file
+    //     body_split = main_content;
+
+    //     content = readFile(argv[1]);      
+    // }
+
+    if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
+        // single file mode: hide the left explorer panel
+        body_split = main_content;
+    } else {
+        // directory mode (or no args): show explorer panel on the left
+        body_split = ftxui::ResizableSplitLeft(left_panel, main_content, &left_panel_width);
+    }
+
     auto constrained_split = ftxui::CatchEvent(body_split, [&](ftxui::Event event) {
         // mouse scroll
         if (event.is_mouse()) {
@@ -506,3 +611,5 @@ int main(void) {
 
     return 0;
 }
+
+// helper for custom interactions for custom styling (eg. just hovering isn't supported in FTXUI so it needs to be manual)
