@@ -18,9 +18,9 @@ namespace fs = std::filesystem;
 
 void opened_directory_file_entry(std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(void)> styling, const std::vector<std::string>& file_paths, std::string &content, std::string &active_file) {
     // reference: left_panel_button_file_arr.push_back(ftxui::Button ("Hello world!", []{}, left_panel_file_styling()));
-    for (const auto& path : file_paths) {
+    for (const std::string path : file_paths) {
         // extract just the file name for clean display
-        std::filesystem::path p(path);
+        fs::path p(path);
         std::string file_name = p.filename().string();
         
         if (fs::is_regular_file(fs::status(p))) {
@@ -31,7 +31,7 @@ void opened_directory_file_entry(std::vector<ftxui::Component> &array, std::func
             }, styling()));
         }
     }
-}
+} // issue with this approach is that the program has no control over what is in the content because it is in the function. Fix soon.
 
 // NOT USING ANYMORE.
 // int parse_return_total_int(std::string content) {
@@ -48,3 +48,18 @@ void opened_directory_file_entry(std::vector<ftxui::Component> &array, std::func
 
 
 // iterate_current_path(get_current_path(ec).string());
+
+void opened_directory_entry(std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(void)> styling, const std::vector<std::string>& file_paths) {
+    for (const std::string path : file_paths) {
+        // extract just the directory name for clean display
+        fs::path p(path);
+        std::string file_name = p.filename().string();
+        
+        if (fs::is_directory(fs::status(p))) {
+            array.push_back(ftxui::Button(file_name, []() {
+                // callback when a file entry button is clicked
+
+            }, styling()));
+        }
+    }
+}

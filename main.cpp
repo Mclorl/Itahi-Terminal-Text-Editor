@@ -139,9 +139,27 @@ int main(int argc, char* argv[]) {
         ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
 
         option.transform = [](const ftxui::EntryState& current_state) {
-            auto e = ftxui::text(current_state.label);
+            auto e = ftxui::text("  " + current_state.label); // the spaces here is just temporary.
             
             if (current_state.focused) {
+                return ftxui::bold(e);
+            }
+            return e;
+        };
+
+        return option;
+    };
+
+    // left panel directory styling
+
+    auto left_panel_directory_styling = []() {
+        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
+
+        option.transform = [](const ftxui::EntryState& current_state) {
+            auto e = ftxui::text("> " + current_state.label);
+            
+            if (current_state.focused) {
+                e = ftxui::text("v " + current_state.label);
                 return ftxui::bold(e);
             }
             return e;
@@ -393,6 +411,8 @@ int main(int argc, char* argv[]) {
     if (argc > 1 && fs::is_directory(fs::status(argv[1]))) {
         target_dir = argv[1];
     } else if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
+        fs::path p(argv[1]);
+        active_file = p.filename().string();
         content = readFile(argv[1]);
     }
 
@@ -407,6 +427,7 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    opened_directory_entry(left_panel_button_file_arr, left_panel_directory_styling, file_list);
     opened_directory_file_entry(left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file);
 
     auto left_panel_button_file_container = ftxui::Container::Vertical({
