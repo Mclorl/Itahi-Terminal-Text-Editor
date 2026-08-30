@@ -12,6 +12,8 @@
 #include "file_system_left_panel.hpp"
 #include "file_entry.hpp"
 
+#include <unordered_set>
+
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
@@ -88,7 +90,7 @@ int main(int argc, char* argv[]) {
     // line increment in every line.
     ftxui::Component file_content_count_component = ftxui::Renderer([&content, &show_line_numbers, &cursor_index, &underline_active_row_on_numbers]() {
         uint32_t total_lines = std::count(content.begin(), content.end(), '\n');
-        if (!content.empty()) {
+        if (!content.empty() || total_lines == 0) {
             total_lines++;
         }
 
@@ -152,14 +154,18 @@ int main(int argc, char* argv[]) {
 
     // left panel directory styling
 
-    auto left_panel_directory_styling = []() {
+    std::unordered_set<std::string> opened_folders;
+
+    auto left_panel_directory_styling = [](const std::string& path, const std::unordered_set<std::string>& opened_folders) -> ftxui::ButtonOption {
         ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
 
-        option.transform = [](const ftxui::EntryState& current_state) {
-            auto e = ftxui::text("> " + current_state.label);
+        option.transform = [path, &opened_folders](const ftxui::EntryState& current_state) {
+            bool is_open = opened_folders.find(path) != opened_folders.end();
+            std::string prefix_folder_status = is_open ? "v " : "> ";
+
+            auto e = ftxui::text(prefix_folder_status + current_state.label);
             
             if (current_state.focused) {
-                e = ftxui::text("v " + current_state.label);
                 return ftxui::bold(e);
             }
             return e;
@@ -403,6 +409,7 @@ int main(int argc, char* argv[]) {
 
     // left panel array.
     std::vector<ftxui::Component> left_panel_button_file_arr;
+    auto left_panel_button_file_container = ftxui::Container::Vertical({});
     int iterations = 0;
 
     // left panel file button function
@@ -427,13 +434,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    opened_directory_entry(left_panel_button_file_arr, left_panel_directory_styling, file_list);
-    opened_directory_file_entry(left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file);
-
-    auto left_panel_button_file_container = ftxui::Container::Vertical({
-        std::move(left_panel_button_file_arr), 
-        // std::move() casts an object into an rvalue so it does not effect the performance.
-    });
+    opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, left_panel_button_file_container, left_panel_width, 0);
+    opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, left_panel_width, 0);
 
     auto main_view = ftxui::Renderer(file_content_input, [&file_content_input, &file_content_count_component]{
 
@@ -478,17 +480,32 @@ int main(int argc, char* argv[]) {
     });
 
     // left panel or file explorer system.
+    int previous_left_panel_width = left_panel_width;
+
     auto left_panel = ftxui::Renderer(left_panel_button_file_container, [&] {
+        if (left_panel_width != previous_left_panel_width) { // if the previous panel width is no longer equal to the current panel width then update the display of the left panel.
+            previous_left_panel_width = left_panel_width;
+
+            left_panel_button_file_container->DetachAllChildren();
+            left_panel_button_file_arr.clear();
+
+            opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, left_panel_button_file_container, left_panel_width, 0);
+            opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, left_panel_width, 0);
+        }
+
         return ftxui::border(
             ftxui::vbox({
                 ftxui::bold(
                     ftxui::text("Explorer")
                 ),
                 ftxui::separator(),
-                left_panel_button_file_container->Render(),
-                
+                ftxui::vscroll_indicator(
+                    ftxui::frame(
+                        left_panel_button_file_container->Render() 
+                    )
+                ),
             })
-        );
+        ) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_panel_width);
     });
 
     auto main_content = ftxui::Renderer(main_content_container, [&] {
@@ -541,6 +558,33 @@ int main(int argc, char* argv[]) {
         );
     });
 
+    auto scrollable_left_panel = ftxui::CatchEvent(left_panel, [&](ftxui::Event event) {
+        if (!event.is_mouse()) {
+            return false;
+        }
+
+        const auto mouse = event.mouse();
+
+        if (mouse.button == ftxui::Mouse::WheelUp) {
+            for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
+                left_panel_button_file_container->OnEvent(ftxui::Event::ArrowUp);
+            }
+
+            return true;
+        }
+
+        if (mouse.button == ftxui::Mouse::WheelDown) {
+            for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
+                left_panel_button_file_container->OnEvent(ftxui::Event::ArrowDown);
+            }
+
+            return true;
+        }
+
+        return false;
+    });
+
+    // default.
     auto body_split = main_content;
 
     // if (argc > 1 && fs::is_directory(fs::status(argv[1]))) { // opened the program with a directory argument, open that directory.
@@ -556,12 +600,14 @@ int main(int argc, char* argv[]) {
     //     content = readFile(argv[1]);      
     // }
 
+
+
     if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
         // single file mode: hide the left explorer panel
         body_split = main_content;
     } else {
         // directory mode (or no args): show explorer panel on the left
-        body_split = ftxui::ResizableSplitLeft(left_panel, main_content, &left_panel_width);
+        body_split = ftxui::ResizableSplitLeft(scrollable_left_panel, main_content, &left_panel_width);
     }
 
     auto constrained_split = ftxui::CatchEvent(body_split, [&](ftxui::Event event) {
@@ -571,14 +617,14 @@ int main(int argc, char* argv[]) {
 
             if (mouse.button == ftxui::Mouse::WheelUp) {
                 for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
-                    body_split->OnEvent(ftxui::Event::ArrowUp);
+                    main_content->OnEvent(ftxui::Event::ArrowUp);
                 }
                 return true;
             }
 
             if (mouse.button == ftxui::Mouse::WheelDown) {
                 for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
-                    body_split->OnEvent(ftxui::Event::ArrowDown);
+                    main_content->OnEvent(ftxui::Event::ArrowDown);
                 }
                 return true;
             }
@@ -607,21 +653,15 @@ int main(int argc, char* argv[]) {
     auto document = ftxui::Renderer(main_container, [&] {
         return ftxui::vbox({
             ftxui::color(ftxui::Color::GrayDark,
-                ftxui::window(
-                    ftxui::bold(
-                        ftxui::text("Itahi Text Editor " + ITAHI_VERSION)
-                    ),
+                ftxui::color(ftxui::Color::White,
+                    ftxui::flex(
+                        ftxui::vbox({
+                            top_bar->Render(),
 
-                    ftxui::color(ftxui::Color::White,
-                        ftxui::flex(
-                            ftxui::vbox({
-                                top_bar->Render(),
-
-                                ftxui::flex(
-                                    constrained_split->Render()
-                                )
-                            })
-                        )
+                            ftxui::flex(
+                                constrained_split->Render()
+                            )
+                        })
                     )
                 )
             )
