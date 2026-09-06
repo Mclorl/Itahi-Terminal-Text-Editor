@@ -8,6 +8,9 @@
 int status = 1;
 int tab_selected = 0;      // 1: File, 2: Edit, 3: View, 4: *Terminal, 5: Help, 0 not active
 std::string active_file = "";
+
+std::string long_active_file_name = "";
+
 std::unordered_set<std::string> opened_folders;
 
 std::string current_events = "System Ready. Select a menu above.";

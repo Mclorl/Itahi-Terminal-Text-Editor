@@ -196,8 +196,8 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, left_panel_button_file_container, left_panel_width, 0);
-    opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, left_panel_width, 0);
+    opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, long_active_file_name, left_panel_button_file_container, left_panel_width, 0);
+    opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0);
 
     auto main_content_container = ftxui::Container::Vertical({
         file_back_button_container,
@@ -214,8 +214,8 @@ int main(int argc, char* argv[]) {
             left_panel_button_file_container->DetachAllChildren();
             left_panel_button_file_arr.clear();
 
-            opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, left_panel_button_file_container, left_panel_width, 0);
-            opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, left_panel_width, 0);
+            opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, long_active_file_name, left_panel_button_file_container, left_panel_width, 0);
+            opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0);
         }
 
         return ftxui::border(

@@ -7,6 +7,8 @@
 
 #include "../library/app_data.hpp"
 
+#include "../library/file_entry.hpp"
+
 // functions
 
 // tab functions
@@ -31,7 +33,8 @@ ftxui::Component file_btn_new_file_func() {
 
 ftxui::Component file_btn_save_file_func() { 
     return ftxui::Button("Save File", [] {
-        current_events = "Action Executed: Saved Current File";
+        current_events = "Saved Current File in " + long_active_file_name;
+        write_file_entry(long_active_file_name, content);
     }, create_plain_button_option());
 }
 // --- Edit Menu Choices ---

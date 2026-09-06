@@ -14,18 +14,24 @@ void new_entry() {
 
 
 // if there is an argument and it is a file, then just open that file.
-void write_file_entry(std::string file_name) {
+void write_file_entry(std::string file_name, std::string &updated_content) {
+    std::ofstream write_file(file_name);
 
+    if (write_file.is_open()) {
+        write_file << updated_content;
+    }
+
+    write_file.close();
 }
 
 std::string readFile(std::string argument_file) {
-    std::ifstream readFile(argument_file);
+    std::ifstream read_file(argument_file);
     std::stringstream temp_content;
-    if (readFile.is_open()) {
-        
-        temp_content << readFile.rdbuf();
+    if (read_file.is_open()) {
+        temp_content << read_file.rdbuf();
     }
 
+    read_file.close();
     return temp_content.str();
 }
 

@@ -15,6 +15,8 @@
 extern int status;
 extern int tab_selected;
 extern std::string active_file;
+extern std::string long_active_file_name;
+
 extern std::unordered_set<std::string> opened_folders;
 
 // bottom event response. Will be change later for command input.

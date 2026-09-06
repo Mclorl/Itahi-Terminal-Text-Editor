@@ -3,7 +3,11 @@
 #include <filesystem>
 #include <system_error>
 
+#include <sstream>
+
 namespace fs = std::filesystem;
+
+void write_file_entry(std::string file_name, std::string &updated_content);
 
 std::string readFile(std::string argument_file);
 
