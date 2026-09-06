@@ -1,0 +1,1 @@
+#define SEPARATOR_TRANSPARENT ftxui::separatorEmpty()

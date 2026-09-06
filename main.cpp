@@ -12,46 +12,35 @@
 #include "file_system_left_panel.hpp"
 #include "file_entry.hpp"
 
+// custom styling
+#include "custom_styling.hpp"
+
+// tab bar content
+#include "tab_contents.hpp"
+
+// global variables include
+#include "global_variables.hpp"
+
 #include <unordered_set>
+
+#include "sets_of_tools.hpp"
+
+#include "functions.hpp"
 
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
     auto screen = ftxui::ScreenInteractive::Fullscreen();
 
-    int tab_selected = 0;      // 1: File, 2: Edit, 3: View, 4: *Terminal, 5: Help, 0 not active
     int left_panel_width = 25; // Default width of the left panel slider
 
     // error catch var
 
     std::error_code ec;
 
-    // data 
-    std::string content;
 
     std::string current_directory_content;
-    
 
-    // mouse sensitivity
-    std::string mouse_sensitivity = "3";
-
-    std::string active_file = "";
-
-    // status
-    int status = 1;
-
-    // Interactive Toggles default
-    // -- files -- 
-    bool auto_save = false;
-    // -- edit -- 
-    // bool word_wrap = true;
-    // -- view -- 
-    bool show_line_numbers = true;
-    bool underline_active_row_on_numbers = false;
-    // bool show_status_bar = true;
-
-    // custom input styling variable.
-    int cursor_index = 0;
 
     // error handling
     if (ec) {
@@ -69,342 +58,115 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // custom input styling function.
-    auto style_file_content_input_option = [&cursor_index]() { // soon change to have focused customizations like underlined when focused.
-        // input, main content
-        ftxui::InputOption file_content_input_option_styling;
+    // change start here.
 
-        file_content_input_option_styling.cursor_position = &cursor_index;
-        file_content_input_option_styling.multiline = true; // explicitly enable multiline
+    // variables containers.
+    ftxui::Component file_back_button = file_back_button_func();
 
-        file_content_input_option_styling.transform = [](ftxui::InputState state) {
-            auto e = state.element;
-            if (state.focused){
-                return e;
-            }
-            return e;
-        };
-        return file_content_input_option_styling;
-    };
+    ftxui::Component file_toggle_autosave = file_toggle_autosave_func();
+    ftxui::Component file_btn_new_file = file_btn_new_file_func();
+    ftxui::Component file_btn_save_file = file_btn_save_file_func();
 
-    // line increment in every line.
-    ftxui::Component file_content_count_component = ftxui::Renderer([&content, &show_line_numbers, &cursor_index, &underline_active_row_on_numbers]() {
-        uint32_t total_lines = std::count(content.begin(), content.end(), '\n');
-        if (!content.empty() || total_lines == 0) {
-            total_lines++;
-        }
+    ftxui::Component edit_btn_undo = edit_btn_undo_func();
+    ftxui::Component edit_btn_redo = edit_btn_redo_func();
 
-        int active_cursor_line = 0;
-        int safe_cursor_limit = std::min((size_t)cursor_index, content.size());
-        for (int i = 0; i < safe_cursor_limit; i++) {
-            if (content[i] == '\n') {
-                active_cursor_line++;
-            }
-        }
+    ftxui::Component toggle_linenums = toggle_linenums_func();
+    ftxui::Component toggle_underline_active_row_on_numbers = toggle_underline_active_row_on_numbers_func();
 
-        ftxui::Elements line_rows; // this is a vector under the FTXUI header files. So any vector functions can be used.
-        for (int i = 0; i < total_lines; i++) {
-            std::string num_str = show_line_numbers ? std::to_string(i + 1) : "|";
-            
-            // format to a clean fixed width of 4 characters or 1000+ up to 9999 lines
-            if (num_str.length() < 4) {
-                num_str = std::string(4 - num_str.length(), ' ') + num_str;
-            }
+    ftxui::Component mouse_sens_row = mouse_sens_row_func();
 
-            ftxui::Element single_row_element = ftxui::text(num_str);
+    ftxui::Component warning_text_link_direct = warning_text_link_direct_func();
+    ftxui::Component btn_about = btn_about_func();
+    ftxui::Component btn_ftxui_about = btn_ftxui_about_func();
 
-            if (i == active_cursor_line) {
-                // highlight the active line number (bright white/yellow and bold)
-                single_row_element = underline_active_row_on_numbers ? ftxui::bold(ftxui::color(ftxui::Color::Yellow, ftxui::underlined(single_row_element))) : ftxui::bold(ftxui::color(ftxui::Color::Yellow, single_row_element));
-            } else {
-                // dim all inactive line numbers
-                single_row_element = ftxui::dim(single_row_element);
-            }
-
-            line_rows.push_back(single_row_element);
-        }
-
-        return ftxui::vbox(std::move(line_rows));
-    });
-
-    ftxui::Component file_content_input = ftxui::Input(&content, "", style_file_content_input_option());    
-
-    std::string current_events = "System Ready. Select a menu above.";
-    ftxui::Element current_events_links_Itahi = ftxui::hyperlink("<LINK>", ftxui::text("Itahi Text Editor " + ITAHI_VERSION));
-    ftxui::Element current_events_links_FTXUI = ftxui::hyperlink("<LINK>", ftxui::text(" Built With FTXUI"));
-    
-    // styling
-
-    // left panel file styling
-
-    auto left_panel_file_styling = []() {
-        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-
-        option.transform = [](const ftxui::EntryState& current_state) {
-            auto e = ftxui::text("  " + current_state.label); // the spaces here is just temporary.
-            
-            if (current_state.focused) {
-                return ftxui::bold(e);
-            }
-            return e;
-        };
-
-        return option;
-    };
-
-    // left panel directory styling
-
-    std::unordered_set<std::string> opened_folders;
-
-    auto left_panel_directory_styling = [](const std::string& path, const std::unordered_set<std::string>& opened_folders) -> ftxui::ButtonOption {
-        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-
-        option.transform = [path, &opened_folders](const ftxui::EntryState& current_state) {
-            bool is_open = opened_folders.find(path) != opened_folders.end();
-            std::string prefix_folder_status = is_open ? "v " : "> ";
-
-            auto e = ftxui::text(prefix_folder_status + current_state.label);
-            
-            if (current_state.focused) {
-                return ftxui::bold(e);
-            }
-            return e;
-        };
-
-        return option;
-    };
-
-    // numeric input custom
-    auto make_numeric_input_row = [](std::string& target_var, std::string label_text, int max_digits_taken, int max_width) {
-        ftxui::Component input_comp = ftxui::Input(&target_var, "");
-
-        input_comp |= ftxui::CatchEvent([&target_var, max_digits_taken](ftxui::Event event) {
-
-            // Block Enter key 
-            if (event == ftxui::Event::Return) {
-                return true;
-            }
-            if (event.is_character()) {
-                std::string input_str = event.character();
-
-                if (input_str.empty()) {
-                    return false;
-                }
-
-                // blocks any character other than int
-                if (!std::isdigit(static_cast<unsigned char>(event.character()[0]))) {
-                    return true;
-                }
-                // Stop accepting text inputs if the max_digits is reached
-                if (target_var.size() >= max_digits_taken) {
-                    return true;
-                }
-            }
-            return false;
-        });
-
-        return ftxui::Renderer(input_comp, [input_comp, label_text, max_digits_taken, max_width]() {
-            return ftxui::hbox({
-                ftxui::text(label_text),
-                ftxui::underlined(
-                    ftxui::size(ftxui::WIDTH, ftxui::EQUAL, max_width)(input_comp->Render())
-                )
-            });
-        });
-    };
-
-    auto create_plain_button_option_symbol = []() {
-        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-        option.transform = [](const ftxui::EntryState& state) {
-            auto e = ftxui::bold(ftxui::text(" " + state.label + " "));
-            if (state.focused) {
-                return ftxui::bgcolor(ftxui::Color::White, ftxui::color(ftxui::Color::Black, e));
-            }
-            return e;
-        };
-        return option;
-    };
-
-    auto create_plain_button_option = []() {
-        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-        option.transform = [](const ftxui::EntryState& state) {
-            auto e = ftxui::text("< " + state.label + " >");
-            if (state.focused) {
-                return ftxui::bold(e);
-            }
-            return e;
-        };
-        return option;
-    };
-
-    auto create_plain_checkbox_option = []() {
-        ftxui::CheckboxOption option = ftxui::CheckboxOption::Simple();
-        option.transform = [](const ftxui::EntryState& state) {
-            std::string check = state.state ? "[X] " : "[ ] ";
-            auto e = ftxui::text(check + state.label);
-            if (state.focused) {
-                return ftxui::bold(e);
-            }
-            return e;
-        };
-        return option;
-    };
-
-    // text button array
-    auto create_text_button = [&](std::string label, int tab_index) {
-        ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-        
-        option.transform = [label, tab_index, &tab_selected](const ftxui::EntryState& state) {
-            if (tab_selected == tab_index + 1) {
-                return ftxui::bold(
-                    ftxui::text("[" + label + "]")
-                );
-            } 
-            if (state.focused) {
-                return ftxui::bold(
-                    ftxui::text(" " + label + " ")
-                );
-            }
-            return ftxui::text(" " + label + " ");
-        };
-
-        return ftxui::Button(label, [tab_index, &tab_selected, &status]() {
-            if (status == 1) {
-                status = 2;
-            }
-            tab_selected = tab_index + 1;
-        }, option);
-    };
-
-    auto btn_file = create_text_button("File", 0);
-    auto btn_edit = create_text_button("Edit", 1);
-    auto btn_view = create_text_button("View", 2);
-    // auto btn_term = create_text_button("Terminal", 3);
-    auto btn_settings = create_text_button("Settings", 3);
-    auto btn_help = create_text_button("Help", 4);
-
-    auto menu_bar_container = ftxui::Container::Horizontal({
-        btn_file,
-        btn_edit,
-        btn_view,
-        // btn_term,
-        btn_settings,
-        btn_help,
-    });
-
-    auto top_bar = ftxui::Renderer(menu_bar_container, [&] {
-        return ftxui::hbox({
-            ftxui::flex(
-                menu_bar_container->Render()
-            ),
-            ftxui::flex(
-                ftxui::center(
-                    ftxui::bold(ftxui::text(active_file.empty() ? "--" : active_file))
-                )
-            ),
-            ftxui::flex(
-                ftxui::hbox({SEPARATOR_TRANSPARENT})
-            )
-        });
-    });
-
-    // functions
-    // --- Back Menu ---
-    auto file_back_button = ftxui::Button("<-", [&current_events, &status, &tab_selected] {
-        current_events = "Action Executed: Back Button Pressed"; // change soon to go back to the text editor. Function.
-        status = 1;
-        tab_selected = 0;
-    }, create_plain_button_option_symbol());
-
-    auto file_back_button_container = ftxui::Container::Horizontal({
+    // containers
+    // tab containers
+    // --- File Back Option ---
+    ftxui::Component file_back_button_container = ftxui::Container::Horizontal({
         file_back_button,
     });
 
     // --- File Menu Choices ---
-    auto file_toggle_autosave = ftxui::Checkbox("Enable Auto-Save", &auto_save, create_plain_checkbox_option());
-    auto file_btn_new_file = ftxui::Button("New File", [&] {
-        current_events = "Action Executed: Created New File";
-    }, create_plain_button_option());
-    auto file_btn_save_file = ftxui::Button("Save File", [&] {
-        current_events = "Action Executed: Saved Current File";
-    }, create_plain_button_option());
-
-    auto file_tab_container = ftxui::Container::Vertical({
+    ftxui::Component file_tab_container = ftxui::Container::Vertical({
         file_toggle_autosave,
         file_btn_new_file,
         file_btn_save_file,
     });
 
     // --- Edit Menu Choices ---
-    // auto edit_toggle_word_wrap = ftxui::Checkbox("Enable Word Wrap", create_plain_checkbox_option());
-    auto edit_btn_undo = ftxui::Button("Undo", [&] {
-        current_events = "Action Executed: Undo";
-    }, create_plain_button_option());
-    auto edit_btn_redo = ftxui::Button("Redo", [&] {
-        current_events = "Action Executed: Redo";
-    }, create_plain_button_option());
 
-    auto edit_tab_container = ftxui::Container::Vertical({
+    ftxui::Component edit_tab_container = ftxui::Container::Vertical({
         //edit_toggle_word_wrap,
         edit_btn_undo,
         edit_btn_redo,
     });
 
     // --- View Menu Choices ---
-    auto toggle_linenums = ftxui::Checkbox("Show Line Numbers", &show_line_numbers, create_plain_checkbox_option());
-    auto toggle_underline_active_row_on_numbers = ftxui::Checkbox("Show Underline On Active Row On Numbers", &underline_active_row_on_numbers, create_plain_checkbox_option());
-    // auto toggle_statusbar = ftxui::Checkbox("Show Status Bar", &show_status_bar, create_plain_checkbox_option());
-
-    auto view_tab_container = ftxui::Container::Vertical({
+    ftxui::Component view_tab_container = ftxui::Container::Vertical({
         toggle_linenums,
         toggle_underline_active_row_on_numbers,
         //toggle_statusbar,
     });
 
     // --- Terminal Menu Choices ---
-    // auto btn_clear_term = ftxui::Button("Clear Output Console", [&] {
-    //     current_events = "Action Executed: Terminal Cleared";
-    // }, create_plain_button_option());
-    // auto btn_build_project = ftxui::Button("Run CMake Build", [&] {
-    //     current_events = "Action Executed: CMake Build Started...";
-    // }, create_plain_button_option());
-
-    // auto term_tab_container = ftxui::Container::Vertical({
+    // ftxui::Component term_tab_container = ftxui::Container::Vertical({
     //     btn_clear_term,
     //     btn_build_project,
     // });
 
     // --- Settings Menu Choices ---
-
-    auto mouse_sens_row = make_numeric_input_row(mouse_sensitivity, "Mouse Sensitivity: ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
-
-    auto settings_tab_container = ftxui::Container::Vertical({
+    ftxui::Component settings_tab_container = ftxui::Container::Vertical({
         mouse_sens_row,
         // tab_size_row, // Just add more column 
     });
 
-
     // --- Help Menu Choices ---
-    auto btn_about = ftxui::Button("About Itahi Editor", [&] {
-        current_events = "Directing To Itahi Editor Repository.";
-        open_url("https://github.com/Mclorl/Itahi-Terminal-Text-Editor");
-    }, create_plain_button_option());
 
-    auto btn_ftxui_about = ftxui::Button("About FTXUI", [&] {
-        current_events = "Directing To FTXUI Repository.";
-        open_url("https://github.com/ArthurSonzogni/FTXUI");
-    }, create_plain_button_option());
-
-    auto warning_text_link_direct = ftxui::Button("Once clicked it will direct you to a website!", [&]{
-        current_events = "Once you click one of the buttons below it will direct you to the github repository.";
-    }, create_plain_button_option());
-
-    auto help_tab_container = ftxui::Container::Vertical({
+    ftxui::Component help_tab_container = ftxui::Container::Vertical({
         warning_text_link_direct,
         btn_about,
         btn_ftxui_about,
     });
 
+    // main view container
+    ftxui::Component input_component = file_content_input(content, cursor_index);
+
+    ftxui::Component main_view = ftxui::Renderer(input_component, [input_component]{
+        return 
+            ftxui::flex(
+                ftxui::vbox({
+                    ftxui::flex(
+                        ftxui::border(
+                            ftxui::vbox(
+                                ftxui::vscroll_indicator(
+                                    ftxui::frame(
+                                        ftxui::hbox({
+                                            file_content_count_component(content, show_line_numbers, cursor_index, underline_active_row_on_numbers)->Render(),
+                                            SEPARATOR_TRANSPARENT,
+                                            input_component->Render()
+                                        })
+                                    )
+                                )
+                            )
+                        )
+                    )
+                })
+            );
+    });
+
+    // Master Tab Container
+    ftxui::Component tab_content = ftxui::Container::Tab({
+        main_view,
+        file_tab_container,
+        edit_tab_container,
+        view_tab_container,
+        // term_tab_container,
+        settings_tab_container,
+        help_tab_container,
+    }, &tab_selected);
+    
+    ftxui::Element current_events_links_Itahi = ftxui::hyperlink("<LINK>", ftxui::text("Itahi Text Editor " + ITAHI_VERSION));
+    ftxui::Element current_events_links_FTXUI = ftxui::hyperlink("<LINK>", ftxui::text(" Built With FTXUI"));
     // --- Left Panel ---
 
     // left panel array.
@@ -436,43 +198,6 @@ int main(int argc, char* argv[]) {
 
     opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, left_panel_button_file_container, left_panel_width, 0);
     opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, left_panel_width, 0);
-
-    auto main_view = ftxui::Renderer(file_content_input, [&file_content_input, &file_content_count_component]{
-
-        return 
-            ftxui::flex(
-                ftxui::vbox({
-                    ftxui::flex(
-                        ftxui::border(
-                            ftxui::vbox(
-                                ftxui::vscroll_indicator(
-                                    ftxui::frame(
-                                        ftxui::hbox({
-                                            file_content_count_component->Render(),
-                                            SEPARATOR_TRANSPARENT,
-                                            file_content_input->Render()
-                                        })
-                                    )
-                                )
-                            )
-                        )
-                    )
-                })
-            );
-    });
-
-    // Master Tab Container
-    auto tab_content = ftxui::Container::Tab({
-        main_view,
-        file_tab_container,
-        edit_tab_container,
-        view_tab_container,
-        // term_tab_container,
-        settings_tab_container,
-        help_tab_container,
-    }, &tab_selected);
-
-    
 
     auto main_content_container = ftxui::Container::Vertical({
         file_back_button_container,
@@ -566,7 +291,7 @@ int main(int argc, char* argv[]) {
         const auto mouse = event.mouse();
 
         if (mouse.button == ftxui::Mouse::WheelUp) {
-            for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
+            for (int i = 0; i < get_mouse_sensitivity(); i++) {
                 left_panel_button_file_container->OnEvent(ftxui::Event::ArrowUp);
             }
 
@@ -574,7 +299,7 @@ int main(int argc, char* argv[]) {
         }
 
         if (mouse.button == ftxui::Mouse::WheelDown) {
-            for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
+            for (int i = 0; i < get_mouse_sensitivity(); i++) {
                 left_panel_button_file_container->OnEvent(ftxui::Event::ArrowDown);
             }
 
@@ -600,8 +325,6 @@ int main(int argc, char* argv[]) {
     //     content = readFile(argv[1]);      
     // }
 
-
-
     if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
         // single file mode: hide the left explorer panel
         body_split = main_content;
@@ -616,14 +339,14 @@ int main(int argc, char* argv[]) {
             auto mouse = event.mouse();
 
             if (mouse.button == ftxui::Mouse::WheelUp) {
-                for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
+                for (int i = 0; i < get_mouse_sensitivity(); i++) {
                     main_content->OnEvent(ftxui::Event::ArrowUp);
                 }
                 return true;
             }
 
             if (mouse.button == ftxui::Mouse::WheelDown) {
-                for (int i = 0; i < std::stoi(mouse_sensitivity); i++) {
+                for (int i = 0; i < get_mouse_sensitivity(); i++) {
                     main_content->OnEvent(ftxui::Event::ArrowDown);
                 }
                 return true;
@@ -646,7 +369,7 @@ int main(int argc, char* argv[]) {
     });
 
     auto main_container = ftxui::Container::Vertical({
-        top_bar,
+        top_bar_component,
         constrained_split,
     });
 
@@ -656,7 +379,7 @@ int main(int argc, char* argv[]) {
                 ftxui::color(ftxui::Color::White,
                     ftxui::flex(
                         ftxui::vbox({
-                            top_bar->Render(),
+                            top_bar_component->Render(),
 
                             ftxui::flex(
                                 constrained_split->Render()
