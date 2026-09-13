@@ -74,14 +74,13 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
         // check if the name is longer, if it is then just add "..." at the end of the name.
         std::string display_name = truncate_name(file_name, total_name_width);
 
-        // initialize the file status.
+        // initialize the file status. One time.
         if (content_already_read_local.find(p.string()) == content_already_read_local.end()) {
             content_already_read_local[p.string()] = false;
             content_read_first[p.string()] = readFile(p.string());
             content_user_updated[p.string()] = "";
+            file_unsaved_status[p.string()] = true;
         }
-
-        file_unsaved_status[p.string()] = true;
         
         ftxui::ButtonOption left_panel_file_styling_local = styling();
 
@@ -175,7 +174,7 @@ void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &
 
         auto folder_component = ftxui::Container::Vertical({});
         
-        auto button = ftxui::Button(display_name, [p, &screen, &container, &array, styling, file_styling, path, &opened_folders, &content, &active_file, children_container, &left_panel_width, total_width_size, &long_active_file_name_local]() {
+        auto button = ftxui::Button(display_name, [p, screen, &container, &array, styling, file_styling, path, &opened_folders, &content, &active_file, children_container, &left_panel_width, total_width_size, &long_active_file_name_local]() {
             // callback when a file entry button is clicked
 
             // close folder and its state.
