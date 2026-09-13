@@ -5,9 +5,11 @@
 
 #include <sstream>
 
+#include "../library/global_variables.hpp"
+
 namespace fs = std::filesystem;
 
-void write_file_entry(std::string file_name, std::string &updated_content);
+std::string write_file_entry(std::string file_name, std::string &updated_content);
 
 std::string readFile(std::string argument_file);
 

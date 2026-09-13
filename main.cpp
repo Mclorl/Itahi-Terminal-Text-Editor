@@ -30,7 +30,9 @@
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
-    auto screen = ftxui::ScreenInteractive::Fullscreen();
+    ftxui::ScreenInteractive screen_instance = ftxui::ScreenInteractive::Fullscreen();
+
+    screen = &screen_instance;
 
     int left_panel_width = 25; // Default width of the left panel slider
 
@@ -38,9 +40,7 @@ int main(int argc, char* argv[]) {
 
     std::error_code ec;
 
-
     std::string current_directory_content;
-
 
     // error handling
     if (ec) {
@@ -181,8 +181,9 @@ int main(int argc, char* argv[]) {
         target_dir = argv[1];
     } else if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
         fs::path p(argv[1]);
-        active_file = p.filename().string();
         content = readFile(argv[1]);
+        active_file = p.filename().string();
+        long_active_file_name = p.string();
     }
 
     current_directory_content = iterate_current_path_shallow(target_dir);
@@ -197,7 +198,7 @@ int main(int argc, char* argv[]) {
     }
 
     opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, long_active_file_name, left_panel_button_file_container, left_panel_width, 0);
-    opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0);
+    opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0, content_already_read);
 
     auto main_content_container = ftxui::Container::Vertical({
         file_back_button_container,
@@ -215,7 +216,7 @@ int main(int argc, char* argv[]) {
             left_panel_button_file_arr.clear();
 
             opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, long_active_file_name, left_panel_button_file_container, left_panel_width, 0);
-            opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0);
+            opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0, content_already_read);
         }
 
         return ftxui::border(
@@ -391,7 +392,7 @@ int main(int argc, char* argv[]) {
         });
     });
 
-    screen.Loop(document);
+    screen->Loop(document);
 
     return 0;
 }

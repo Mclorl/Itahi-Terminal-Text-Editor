@@ -15,6 +15,8 @@
 
 #include "../library/file_system_left_panel.hpp"
 
+#include "../library/global_variables.hpp"
+
 namespace fs = std::filesystem;
 
 std::string truncate_name(const std::string& name, int available_width) {
@@ -26,11 +28,15 @@ std::string truncate_name(const std::string& name, int available_width) {
         return name;
     }
 
-    // if (available_width <= 3) {
-    //     return name.substr(0, static_cast<std::size_t>(available_width));
-    // }
+    std::string suffix = "...";
 
-    return name.substr(0, static_cast<std::size_t>(available_width - 3)) + "...";
+    if (available_width <= static_cast<int>(suffix.size())) {
+        return suffix.substr(0, static_cast<std::size_t>(available_width));
+    }
+
+    const std::size_t name_width = static_cast<std::size_t>(available_width - suffix.size());
+
+    return name.substr(0, name_width) + suffix;
 }
 
 
@@ -46,8 +52,9 @@ int available_name_width(int panel_width, int indentation_level) {
     return std::max(1, available_width);
 }
 
-void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(void)> styling, const std::vector<std::string>& file_paths, std::string &content, std::string &active_file, std::string &long_active_file_name_local, int &left_panel_width, int total_width_size) {
+void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(void)> styling, const std::vector<std::string>& file_paths, std::string &content_main_user_updated, std::string &active_file, std::string &long_active_file_name_local, int &left_panel_width, int total_width_size, std::unordered_map<std::string, bool> &content_already_read_local, std::string file_folder_path_key_access) {
     // reference: left_panel_button_file_arr.push_back(ftxui::Button ("Hello world!", []{}, left_panel_file_styling()));
+    
     for (const std::string path : file_paths) {
         // extract just the file name for clean display
         fs::path p(path);
@@ -67,12 +74,45 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
         // check if the name is longer, if it is then just add "..." at the end of the name.
         std::string display_name = truncate_name(file_name, total_name_width);
 
-        auto button = ftxui::Button(display_name, [p, file_name, &content, &active_file, &long_active_file_name_local]() {
+        // initialize the file status.
+        if (content_already_read_local.find(p.string()) == content_already_read_local.end()) {
+            content_already_read_local[p.string()] = false;
+            content_read_first[p.string()] = readFile(p.string());
+            content_user_updated[p.string()] = "";
+        }
+
+        file_unsaved_status[p.string()] = true;
+        
+        ftxui::ButtonOption left_panel_file_styling_local = styling();
+
+            left_panel_file_styling_local.transform = [p](const ftxui::EntryState& current_state) {
+            auto e = ftxui::text("  " + current_state.label); // the spaces here is just temporary.
+            e = ftxui::text("  " + current_state.label + (file_unsaved_status[p.string()] ? "" : "*"));
+            
+            if (current_state.focused) {
+                return ftxui::bold(e);
+            }
+            return e;
+        };
+
+        auto button = ftxui::Button(display_name, [p, file_name, &content_already_read_local, &content_main_user_updated , &long_active_file_name_local]() {
             // callback when a file entry button is clicked
-            content = readFile(p.string());
-            active_file = file_name;
+            
+            // change status to already read file.
+            // make the content_user_updated to update the content once the user type or updated the content_main_user_updated.
+            if (!content_already_read_local[p.string()]) {
+                content_already_read_local[p.string()] = true;
+                content_main_user_updated = content_read_first[p.string()];
+            } else if (!content_user_updated[p.string()].empty()) {
+                content_main_user_updated = content_user_updated[p.string()];
+            } else {
+                content_main_user_updated = content_read_first[p.string()];
+            }
+
+            active_file_not_saved = file_name + "*";
+            active_file_saved = file_name;
             long_active_file_name_local = p.string();
-        }, styling());
+        }, left_panel_file_styling_local);
 
         array.push_back(button);
         container->Add(button);
@@ -96,7 +136,7 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
 
 // iterate_current_path(get_current_path(ec).string());
 
-void opened_directory_entry(ftxui::ScreenInteractive& screen, ftxui::Component &container, std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(const std::string&, const std::unordered_set<std::string>&)> styling, std::function<ftxui::ButtonOption(void)> file_styling, const std::vector<std::string>& file_paths, std::unordered_set<std::string>& opened_folders, std::string &content, std::string &active_file, std::string &long_active_file_name_local, ftxui::Component parent_container, int &left_panel_width, int total_width_size) {
+void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &container, std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(const std::string&, const std::unordered_set<std::string>&)> styling, std::function<ftxui::ButtonOption(void)> file_styling, const std::vector<std::string>& file_paths, std::unordered_set<std::string>& opened_folders, std::string &content, std::string &active_file, std::string &long_active_file_name_local, ftxui::Component parent_container, int &left_panel_width, int total_width_size) {
 
     for (const std::string path : file_paths) {
         // extract just the directory name for clean display
@@ -116,6 +156,13 @@ void opened_directory_entry(ftxui::ScreenInteractive& screen, ftxui::Component &
         // check if the name is longer, if it is then just add "..." at the end of the name.
         std::string display_name = truncate_name(file_name, total_name_width);
 
+        // DEBUG CODE FOR FOLDER OPENED STATUS IN THE ENTIRE RUNTIME.
+        // if (folder_opened_status[p.string()]) {
+        //     display_name = truncate_name(file_name, total_name_width) + " t";
+        // } else {
+        //     display_name = truncate_name(file_name, total_name_width) + " f";
+        // }
+
         // seperate container for each folder
         auto children_container = ftxui::Container::Vertical({});
 
@@ -128,19 +175,23 @@ void opened_directory_entry(ftxui::ScreenInteractive& screen, ftxui::Component &
 
         auto folder_component = ftxui::Container::Vertical({});
         
-        auto button = ftxui::Button(display_name, [&screen, &container, &array, styling, file_styling, path, &opened_folders, &content, &active_file, children_container, &left_panel_width, total_width_size, &long_active_file_name_local]() {
+        auto button = ftxui::Button(display_name, [p, &screen, &container, &array, styling, file_styling, path, &opened_folders, &content, &active_file, children_container, &left_panel_width, total_width_size, &long_active_file_name_local]() {
             // callback when a file entry button is clicked
 
             // close folder and its state.
             if (opened_folders.count(path)) {
                 opened_folders.erase(path);
 
-                screen.PostEvent(ftxui::Event::Custom);
+                screen->PostEvent(ftxui::Event::Custom);
                 return;
             }
 
             // open folder and its state.
             opened_folders.insert(path);
+
+            if (!folder_opened_status[p.string()]) {
+                folder_opened_status[p.string()] = true;
+            }
 
             children_container->DetachAllChildren();
 
@@ -158,9 +209,9 @@ void opened_directory_entry(ftxui::ScreenInteractive& screen, ftxui::Component &
             }
 
             opened_directory_entry(screen, container, array, styling, file_styling, folder_content, opened_folders, content, active_file, long_active_file_name_local, children_container, left_panel_width, total_width_size + 1);
-            opened_directory_file_entry(children_container, array, file_styling, folder_content, content, active_file, long_active_file_name_local, left_panel_width, total_width_size + 1);
+            opened_directory_file_entry(children_container, array, file_styling, folder_content, content, active_file, long_active_file_name_local, left_panel_width, total_width_size + 1, content_already_read, p.string());
 
-            screen.PostEvent(ftxui::Event::Custom);
+            screen->PostEvent(ftxui::Event::Custom);
 
         }, styling(path, opened_folders));
 
@@ -180,7 +231,7 @@ void opened_directory_entry(ftxui::ScreenInteractive& screen, ftxui::Component &
             }
 
             opened_directory_entry(screen, container, array, styling, file_styling, folder_content, opened_folders, content, active_file, long_active_file_name_local, children_container, left_panel_width, total_width_size + 1);
-            opened_directory_file_entry(children_container, array, file_styling, folder_content, content, active_file, long_active_file_name_local, left_panel_width, total_width_size + 1);
+            opened_directory_file_entry(children_container, array, file_styling, folder_content, content, active_file, long_active_file_name_local, left_panel_width, total_width_size + 1, content_already_read, p.string());
 
         }
 

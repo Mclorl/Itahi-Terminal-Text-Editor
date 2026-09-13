@@ -4,6 +4,8 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 
+#include "ftxui/screen/color.hpp"
+
 // tab functions
 
 // --- File Back Option ---
@@ -37,3 +39,5 @@ ftxui::Component warning_text_link_direct_func();
 
 // mouse sensitivity input fallback function.
 int get_mouse_sensitivity();
+
+ftxui::Component file_content_input(std::string &content, int &cursor_index);

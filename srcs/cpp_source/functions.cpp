@@ -33,8 +33,7 @@ ftxui::Component file_btn_new_file_func() {
 
 ftxui::Component file_btn_save_file_func() { 
     return ftxui::Button("Save File", [] {
-        current_events = "Saved Current File in " + long_active_file_name;
-        write_file_entry(long_active_file_name, content);
+        current_events = write_file_entry(long_active_file_name, content);
     }, create_plain_button_option());
 }
 // --- Edit Menu Choices ---
@@ -100,4 +99,35 @@ int get_mouse_sensitivity() {
     } catch (const std::exception&) {
         return 1;
     }
+}
+
+ftxui::Component file_content_input(std::string &content, int &cursor_index) {
+    ftxui::InputOption custom_input_style_update = style_file_content_input_option(cursor_index);
+
+    custom_input_style_update.on_change = [&](void) { // no delay on updating the active_file
+        if (content_read_first[long_active_file_name] != content) {
+            content_user_updated[long_active_file_name] = content;
+            file_unsaved_status[long_active_file_name] = false;
+            active_file = active_file_not_saved;
+        } else {
+            active_file = active_file_saved;
+            file_unsaved_status[long_active_file_name] = true;
+        }
+    };
+
+    ftxui::Component main_user_input = ftxui::Input(&content, "Type something...", custom_input_style_update);
+
+    main_user_input |= ftxui::CatchEvent([&](ftxui::Event event) { // it is event-based, so any inputs (cursor movement, key presses) will automatically update the active_file
+        if (content_read_first[long_active_file_name] != content) {
+            content_user_updated[long_active_file_name] = content;
+            active_file = active_file_not_saved;
+            file_unsaved_status[long_active_file_name] = false;
+        } else {
+            active_file = active_file_saved;
+            file_unsaved_status[long_active_file_name] = true;
+        }
+        return false;
+    });
+
+    return main_user_input;
 }

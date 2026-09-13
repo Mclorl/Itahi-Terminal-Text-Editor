@@ -4,10 +4,16 @@
 #include <string>
 #include <unordered_set>
 
+// global screen
+ftxui::ScreenInteractive* screen = nullptr;
+
 // status
 int status = 1;
 int tab_selected = 0;      // 1: File, 2: Edit, 3: View, 4: *Terminal, 5: Help, 0 not active
 std::string active_file = "";
+
+std::string active_file_not_saved;
+std::string active_file_saved;
 
 std::string long_active_file_name = "";
 
@@ -34,9 +40,16 @@ bool underline_active_row_on_numbers = false;
 // data
 
 // global content
-std::string content;
+std::string content = "";
 
 // Global Components
-ftxui::Component file_content_input(std::string &content, int &cursor_index) {
-    return ftxui::Input(&content, "", style_file_content_input_option(cursor_index));
-}
+
+
+std::unordered_map<std::string, bool> content_already_read;
+std::unordered_map<std::string, bool> folder_opened_status;
+
+std::unordered_map<std::string, bool> file_unsaved_status;
+
+std::unordered_map<std::string, std::string> content_read_first;
+std::unordered_map<std::string, std::string> content_user_updated;
+

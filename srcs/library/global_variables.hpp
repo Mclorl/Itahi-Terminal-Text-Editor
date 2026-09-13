@@ -7,6 +7,9 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
 
+// global screen
+extern ftxui::ScreenInteractive* screen;
+
 // FIXED VALUES
 #define MAX_WIDTH_INPUT_INT_DEFAULT 4
 
@@ -14,7 +17,12 @@
 
 extern int status;
 extern int tab_selected;
+
 extern std::string active_file;
+
+extern std::string active_file_not_saved;
+extern std::string active_file_saved;
+
 extern std::string long_active_file_name;
 
 extern std::unordered_set<std::string> opened_folders;
@@ -41,4 +49,13 @@ extern bool underline_active_row_on_numbers;
 extern std::string content;
 
 // Global Components
-ftxui::Component file_content_input(std::string &content, int &cursor_index);
+
+extern std::unordered_map<std::string, bool> content_already_read;
+extern std::unordered_map<std::string, bool> folder_opened_status;
+
+extern std::unordered_map<std::string, bool> file_unsaved_status;
+
+extern std::unordered_map<std::string, std::string> content_read_first;
+extern std::unordered_map<std::string, std::string> content_user_updated;
+
+

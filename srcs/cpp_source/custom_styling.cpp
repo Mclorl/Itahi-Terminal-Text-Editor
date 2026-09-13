@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include "../library/custom_styling.hpp"
+#include "../library/global_variables.hpp"
 
 
 // custom input styling variable.
@@ -23,6 +24,11 @@ ftxui::InputOption style_file_content_input_option(int &cursor_index) {
 
         file_content_input_option_styling.transform = [](ftxui::InputState state) {
             auto e = state.element;
+            
+            if (state.is_placeholder) {
+                return ftxui::color(ftxui::Color::GrayDark, e);
+            }
+
             if (state.focused){
                 return e;
             }
@@ -89,15 +95,6 @@ ftxui::Component file_content_count_component(
 
 ftxui::ButtonOption left_panel_file_styling() {
     ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-
-    option.transform = [](const ftxui::EntryState& current_state) {
-        auto e = ftxui::text("  " + current_state.label); // the spaces here is just temporary.
-        
-        if (current_state.focused) {
-            return ftxui::bold(e);
-        }
-        return e;
-    };
 
     return option;
 }

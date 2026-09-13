@@ -14,14 +14,23 @@ void new_entry() {
 
 
 // if there is an argument and it is a file, then just open that file.
-void write_file_entry(std::string file_name, std::string &updated_content) {
+std::string write_file_entry(std::string file_name, std::string &updated_content) {
     std::ofstream write_file(file_name);
 
-    if (write_file.is_open()) {
-        write_file << updated_content;
+    if (!write_file.is_open()) {
+        return "No Selected File.";
     }
 
+    write_file << updated_content;
+    content_user_updated[long_active_file_name].clear(); // It will be better if the array is deleted instead of setting the string or value to empty. Change soon.
+    content_read_first[long_active_file_name] = updated_content;
+    
+    // active_file update
+    active_file = active_file_saved;
+    file_unsaved_status[long_active_file_name] = true;
     write_file.close();
+    screen->PostEvent(ftxui::Event::Custom);
+    return "Saved Current File in " + file_name;
 }
 
 std::string readFile(std::string argument_file) {
