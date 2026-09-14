@@ -181,8 +181,24 @@ int main(int argc, char* argv[]) {
         target_dir = argv[1];
     } else if (argc > 1 && fs::is_regular_file(fs::status(argv[1]))) {
         fs::path p(argv[1]);
-        content = readFile(argv[1]);
-        active_file = p.filename().string();
+        content_read_first[p.string()] = readFile(argv[1]);
+        content_user_updated[p.string()] = "";
+
+        // active_file = p.filename().string();
+        long_active_file_name = p.string();
+        content_already_read[p.string()] = true;
+
+        if (!content_already_read[p.string()]) {
+            content_already_read[p.string()] = true;
+            content = content_read_first[p.string()];
+        } else if (!content_user_updated[p.string()].empty()) {
+            content = content_user_updated[p.string()];
+        } else {
+            content = content_read_first[p.string()];
+        }
+
+        active_file_not_saved = p.filename().string() + "*";
+        active_file_saved = p.filename().string();
         long_active_file_name = p.string();
     }
 

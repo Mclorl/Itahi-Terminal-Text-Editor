@@ -79,14 +79,14 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
             content_already_read_local[p.string()] = false;
             content_read_first[p.string()] = readFile(p.string());
             content_user_updated[p.string()] = "";
-            file_unsaved_status[p.string()] = true;
         }
         
         ftxui::ButtonOption left_panel_file_styling_local = styling();
 
             left_panel_file_styling_local.transform = [p](const ftxui::EntryState& current_state) {
-            auto e = ftxui::text("  " + current_state.label); // the spaces here is just temporary.
-            e = ftxui::text("  " + current_state.label + (file_unsaved_status[p.string()] ? "" : "*"));
+            ftxui::Element e; // the spaces here is just temporary.
+            // soon add a function if the code has error then turn this to red.
+            e = file_unsaved_status[p.string()] ? ftxui::color(ftxui::Color::Yellow2, ftxui::text("  " + current_state.label + "*")) : ftxui::text("  " + current_state.label + "");
             
             if (current_state.focused) {
                 return ftxui::bold(e);

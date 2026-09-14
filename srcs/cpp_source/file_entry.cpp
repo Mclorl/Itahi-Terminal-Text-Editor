@@ -27,7 +27,7 @@ std::string write_file_entry(std::string file_name, std::string &updated_content
     
     // active_file update
     active_file = active_file_saved;
-    file_unsaved_status[long_active_file_name] = true;
+    file_unsaved_status[long_active_file_name] = false;
     write_file.close();
     screen->PostEvent(ftxui::Event::Custom);
     return "Saved Current File in " + file_name;

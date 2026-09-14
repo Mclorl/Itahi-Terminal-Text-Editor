@@ -107,11 +107,11 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
     custom_input_style_update.on_change = [&](void) { // no delay on updating the active_file
         if (content_read_first[long_active_file_name] != content) {
             content_user_updated[long_active_file_name] = content;
-            file_unsaved_status[long_active_file_name] = false;
+            file_unsaved_status[long_active_file_name] = true;
             active_file = active_file_not_saved;
         } else {
             active_file = active_file_saved;
-            file_unsaved_status[long_active_file_name] = true;
+            file_unsaved_status[long_active_file_name] = false;
         }
     };
 
@@ -121,10 +121,10 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
         if (content_read_first[long_active_file_name] != content) {
             content_user_updated[long_active_file_name] = content;
             active_file = active_file_not_saved;
-            file_unsaved_status[long_active_file_name] = false;
+            file_unsaved_status[long_active_file_name] = true;
         } else {
             active_file = active_file_saved;
-            file_unsaved_status[long_active_file_name] = true;
+            file_unsaved_status[long_active_file_name] = false;
         }
         return false;
     });
