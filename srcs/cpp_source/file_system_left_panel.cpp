@@ -83,10 +83,11 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
         
         ftxui::ButtonOption left_panel_file_styling_local = styling();
 
-            left_panel_file_styling_local.transform = [p](const ftxui::EntryState& current_state) {
+        left_panel_file_styling_local.transform = [p](const ftxui::EntryState& current_state) {
             ftxui::Element e; // the spaces here is just temporary.
             // soon add a function if the code has error then turn this to red.
-            e = file_unsaved_status[p.string()] ? ftxui::color(ftxui::Color::Yellow2, ftxui::text("  " + current_state.label + "*")) : ftxui::text("  " + current_state.label + "");
+            e = file_unsaved_status[p.string()] ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + current_state.label + "*")) : ftxui::text("  " + current_state.label + "");
+            screen->PostEvent(ftxui::Event::Custom);
             
             if (current_state.focused) {
                 return ftxui::bold(e);
@@ -135,7 +136,7 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
 
 // iterate_current_path(get_current_path(ec).string());
 
-void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &container, std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption(const std::string&, const std::unordered_set<std::string>&)> styling, std::function<ftxui::ButtonOption(void)> file_styling, const std::vector<std::string>& file_paths, std::unordered_set<std::string>& opened_folders, std::string &content, std::string &active_file, std::string &long_active_file_name_local, ftxui::Component parent_container, int &left_panel_width, int total_width_size) {
+void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &container, std::vector<ftxui::Component> &array, std::function<ftxui::ButtonOption()> styling, std::function<ftxui::ButtonOption(void)> file_styling, const std::vector<std::string>& file_paths, std::unordered_set<std::string>& opened_folders, std::string &content, std::string &active_file, std::string &long_active_file_name_local, ftxui::Component parent_container, int &left_panel_width, int total_width_size) {
 
     for (const std::string path : file_paths) {
         // extract just the directory name for clean display
@@ -173,6 +174,44 @@ void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &
         );
 
         auto folder_component = ftxui::Container::Vertical({});
+
+        ftxui::ButtonOption left_panel_directory_styling_local = styling();
+
+        left_panel_directory_styling_local.transform = [p, path, &opened_folders, &status, screen](const ftxui::EntryState& current_state) {
+            bool is_open = opened_folders.find(path) != opened_folders.end();
+
+            std::string prefix_folder_status = is_open ? "v " : "> ";
+
+            const std::string current_directory_content_styling = iterate_current_path_shallow(path);
+
+            std::stringstream s_2_style(current_directory_content_styling);
+            std::string line_style;
+
+            while(std::getline(s_2_style, line_style)) {
+                if (file_unsaved_status[line_style] && fs::is_regular_file(line_style)) {
+                    has_unsaved_file_inside_directory[p.string()] = true;
+                    screen->PostEvent(ftxui::Event::Custom);
+                    break;
+                } else {
+                    has_unsaved_file_inside_directory[p.string()] = false;
+                }
+                
+                if (has_unsaved_file_inside_directory[line_style] && fs::is_directory(line_style)) {
+                    has_unsaved_file_inside_directory[p.string()] = true;
+                    screen->PostEvent(ftxui::Event::Custom);
+                    break;
+                } else {
+                    has_unsaved_file_inside_directory[p.string()] = false;
+                }
+            }
+
+            ftxui::Element e = has_unsaved_file_inside_directory[p.string()] ? ftxui::color(ftxui::Color::Yellow1, ftxui::text(prefix_folder_status + current_state.label)) : ftxui::text(prefix_folder_status + current_state.label);
+
+            if (current_state.focused) {
+                return ftxui::bold(e);
+            }
+            return e;
+        };
         
         auto button = ftxui::Button(display_name, [p, screen, &container, &array, styling, file_styling, path, &opened_folders, &content, &active_file, children_container, &left_panel_width, total_width_size, &long_active_file_name_local]() {
             // callback when a file entry button is clicked
@@ -212,7 +251,7 @@ void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &
 
             screen->PostEvent(ftxui::Event::Custom);
 
-        }, styling(path, opened_folders));
+        }, left_panel_directory_styling_local);
 
         // after resizing—reconstruct its children immediately.
         if (opened_folders.count(path) != 0) {

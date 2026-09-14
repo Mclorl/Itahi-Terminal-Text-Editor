@@ -22,7 +22,7 @@ ftxui::Component file_content_count_component(std::string &content,
 
 ftxui::ButtonOption left_panel_file_styling();
 
-ftxui::ButtonOption left_panel_directory_styling(const std::string &path, const std::unordered_set<std::string>& opened_folders);
+ftxui::ButtonOption left_panel_directory_styling();
 
 ftxui::Component make_numeric_input_row(std::string& target_var, std::string label_text, int max_digits_taken, int max_width);
 

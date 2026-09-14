@@ -36,7 +36,7 @@ ftxui::Component top_bar(std::string &active_file) {
             ),
             ftxui::flex(
                 ftxui::center(
-                    ftxui::bold(ftxui::text(active_file.empty() ? "--" : active_file))
+                    ftxui::bold(active_file.empty() ? ftxui::text("--") : active_file == active_file_not_saved ? ftxui::color(ftxui::Color::Yellow, ftxui::text(active_file)) : ftxui::text(active_file))
                 )
             ),
             ftxui::flex(

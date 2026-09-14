@@ -99,20 +99,20 @@ ftxui::ButtonOption left_panel_file_styling() {
     return option;
 }
 
-ftxui::ButtonOption left_panel_directory_styling(const std::string &path, const std::unordered_set<std::string>& opened_folders) {
+ftxui::ButtonOption left_panel_directory_styling() {
     ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
+    // this is now in the file_system_left_panel.cpp. This is just a save for the default style directory.
+    // option.transform = [path, &opened_folders](const ftxui::EntryState& current_state) {
+    //     bool is_open = opened_folders.find(path) != opened_folders.end();
+    //     std::string prefix_folder_status = is_open ? "v " : "> ";
 
-    option.transform = [path, &opened_folders](const ftxui::EntryState& current_state) {
-        bool is_open = opened_folders.find(path) != opened_folders.end();
-        std::string prefix_folder_status = is_open ? "v " : "> ";
-
-        auto e = ftxui::text(prefix_folder_status + current_state.label);
+    //     auto e = ftxui::text(prefix_folder_status + current_state.label);
             
-        if (current_state.focused) {
-            return ftxui::bold(e);
-        }
-        return e;
-    };
+    //     if (current_state.focused) {
+    //         return ftxui::bold(e);
+    //     }
+    //     return e;
+    // };
 
     return option;
 }

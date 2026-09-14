@@ -49,6 +49,7 @@ std::unordered_map<std::string, bool> content_already_read;
 std::unordered_map<std::string, bool> folder_opened_status;
 
 std::unordered_map<std::string, bool> file_unsaved_status;
+std::unordered_map<std::string, bool> has_unsaved_file_inside_directory;
 
 std::unordered_map<std::string, std::string> content_read_first;
 std::unordered_map<std::string, std::string> content_user_updated;
