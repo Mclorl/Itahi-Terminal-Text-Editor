@@ -41,3 +41,5 @@ ftxui::Component warning_text_link_direct_func();
 int get_mouse_sensitivity();
 
 ftxui::Component file_content_input(std::string &content, int &cursor_index);
+
+bool check_content_directory_for_unsaved_file(std::string path);

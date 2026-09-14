@@ -17,6 +17,8 @@
 
 #include "../library/global_variables.hpp"
 
+#include "../library/functions.hpp"
+
 namespace fs = std::filesystem;
 
 std::string truncate_name(const std::string& name, int available_width) {
@@ -177,33 +179,35 @@ void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &
 
         ftxui::ButtonOption left_panel_directory_styling_local = styling();
 
-        left_panel_directory_styling_local.transform = [p, path, &opened_folders, &status, screen](const ftxui::EntryState& current_state) {
+        left_panel_directory_styling_local.transform = [p, path, &opened_folders, &status, screen, &active_file](const ftxui::EntryState& current_state) {
             bool is_open = opened_folders.find(path) != opened_folders.end();
 
             std::string prefix_folder_status = is_open ? "v " : "> ";
 
-            const std::string current_directory_content_styling = iterate_current_path_shallow(path);
+            // const std::string current_directory_content_styling = iterate_current_path_shallow(path);
 
-            std::stringstream s_2_style(current_directory_content_styling);
-            std::string line_style;
+            // std::stringstream s_2_style(current_directory_content_styling);
+            // std::string line_style;
 
-            while(std::getline(s_2_style, line_style)) {
-                if (file_unsaved_status[line_style] && fs::is_regular_file(line_style)) {
-                    has_unsaved_file_inside_directory[p.string()] = true;
-                    screen->PostEvent(ftxui::Event::Custom);
-                    break;
-                } else {
-                    has_unsaved_file_inside_directory[p.string()] = false;
-                }
+            // while(std::getline(s_2_style, line_style)) {
+            //     if (file_unsaved_status[line_style] && fs::is_regular_file(line_style)) {
+            //         has_unsaved_file_inside_directory[p.string()] = true;
+            //         screen->PostEvent(ftxui::Event::Custom);
+            //         break;
+            //     } else {
+            //         has_unsaved_file_inside_directory[p.string()] = false;
+            //     }
                 
-                if (has_unsaved_file_inside_directory[line_style] && fs::is_directory(line_style)) {
-                    has_unsaved_file_inside_directory[p.string()] = true;
-                    screen->PostEvent(ftxui::Event::Custom);
-                    break;
-                } else {
-                    has_unsaved_file_inside_directory[p.string()] = false;
-                }
-            }
+            //     if (fs::is_directory(line_style)) {
+                    
+            //         screen->PostEvent(ftxui::Event::Custom);
+            //         break;
+            //     } else {
+            //         has_unsaved_file_inside_directory[p.string()] = false;
+            //     }
+            // }
+
+            has_unsaved_file_inside_directory[p.string()] = check_content_directory_for_unsaved_file(p.string());
 
             ftxui::Element e = has_unsaved_file_inside_directory[p.string()] ? ftxui::color(ftxui::Color::Yellow1, ftxui::text(prefix_folder_status + current_state.label)) : ftxui::text(prefix_folder_status + current_state.label);
 

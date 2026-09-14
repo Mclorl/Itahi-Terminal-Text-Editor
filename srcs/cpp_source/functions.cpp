@@ -131,3 +131,24 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
 
     return main_user_input;
 }
+
+bool check_content_directory_for_unsaved_file(std::string path) {
+    std::string directory_path = iterate_current_path_shallow(path);
+
+    std::stringstream s(directory_path);
+    std::string line;
+
+    while (std::getline(s, line)) {
+        if (fs::is_directory(line)) {
+            if (check_content_directory_for_unsaved_file(line)) {
+                return true;
+            }
+        }
+
+        if (file_unsaved_status[line] && fs::is_regular_file(line)) {
+            return true;
+        } 
+    }
+
+    return false;
+}
