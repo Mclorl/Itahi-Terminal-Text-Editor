@@ -21,21 +21,24 @@
 
 namespace fs = std::filesystem;
 
-std::string truncate_name(const std::string& name, int available_width) {
+std::string truncate_name(const std::string& name, int available_width, std::string path) {
     if (available_width <= 0) {
         return {};
     }
 
     if (static_cast<int>(name.size()) <= available_width) {
+        file_truncate_name_bool_status[path] = false;
         return name;
     }
 
     std::string suffix = "...";
 
     if (available_width <= static_cast<int>(suffix.size())) {
+        file_truncate_name_bool_status[path] = true;
         return suffix.substr(0, static_cast<std::size_t>(available_width));
     }
 
+    file_truncate_name_bool_status[path] = true;
     const std::size_t name_width = static_cast<std::size_t>(available_width - suffix.size());
 
     return name.substr(0, name_width) + suffix;
@@ -74,7 +77,7 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
         int total_name_width = available_name_width(left_panel_width, total_width_size);
 
         // check if the name is longer, if it is then just add "..." at the end of the name.
-        std::string display_name = truncate_name(file_name, total_name_width);
+        std::string display_name = truncate_name(file_name, total_name_width, p.string());
 
         // initialize the file status. One time.
         if (content_already_read_local.find(p.string()) == content_already_read_local.end()) {
@@ -88,7 +91,9 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
         left_panel_file_styling_local.transform = [p](const ftxui::EntryState& current_state) {
             ftxui::Element e; // the spaces here is just temporary.
             // soon add a function if the code has error then turn this to red.
-            e = file_unsaved_status[p.string()] ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + current_state.label + "*")) : ftxui::text("  " + current_state.label + "");
+            std::string file_display_name = current_state.label;
+            file_display_name.erase(file_unsaved_status[p.string()] && file_truncate_name_bool_status[p.string()] ? file_display_name.length() - 1 : file_display_name.length());
+            e = file_unsaved_status[p.string()] ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + file_display_name + "*")) : ftxui::text("  " + current_state.label + "");
             screen->PostEvent(ftxui::Event::Custom);
             
             if (current_state.focused) {
@@ -156,7 +161,7 @@ void opened_directory_entry(ftxui::ScreenInteractive *screen, ftxui::Component &
         int total_name_width = available_name_width(left_panel_width, total_width_size);
 
         // check if the name is longer, if it is then just add "..." at the end of the name.
-        std::string display_name = truncate_name(file_name, total_name_width);
+        std::string display_name = truncate_name(file_name, total_name_width, p.string());
 
         // DEBUG CODE FOR FOLDER OPENED STATUS IN THE ENTIRE RUNTIME.
         // if (folder_opened_status[p.string()]) {

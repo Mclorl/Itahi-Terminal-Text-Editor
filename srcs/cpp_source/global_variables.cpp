@@ -48,6 +48,8 @@ std::string content = "";
 std::unordered_map<std::string, bool> content_already_read;
 std::unordered_map<std::string, bool> folder_opened_status;
 
+std::unordered_map<std::string, bool> file_truncate_name_bool_status;
+
 std::unordered_map<std::string, bool> file_unsaved_status;
 std::unordered_map<std::string, bool> has_unsaved_file_inside_directory;
 
