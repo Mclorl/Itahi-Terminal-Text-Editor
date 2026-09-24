@@ -44,7 +44,6 @@ std::string content = "";
 
 // Global Components
 
-
 std::unordered_map<std::string, bool> content_already_read;
 std::unordered_map<std::string, bool> folder_opened_status;
 
