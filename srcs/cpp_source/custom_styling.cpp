@@ -2,12 +2,48 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/dom/node.hpp>
 
 #include <algorithm>
+#include <memory>
 #include <unordered_set>
+#include <utility>
 
 #include "../library/custom_styling.hpp"
 #include "../library/global_variables.hpp"
+
+namespace {
+
+    // decorator recording the exact box given by the parent during layout. Unlike
+    // `ftxui::reflect`, Render() does not intersect the recorded box with the
+    // screen stencil, so off-screen / larger-than-viewport content keeps a valid
+    // box.
+    class BoxCapture : public ftxui::Node {
+    public:
+    BoxCapture(ftxui::Element child, ftxui::Box& box) : ftxui::Node({std::move(child)}), captured_box_(box) {}
+
+    void ComputeRequirement() override {
+        ftxui::Node::ComputeRequirement();
+        requirement_ = children_[0]->requirement();
+    }
+
+    void SetBox(ftxui::Box box) override {
+        captured_box_ = box;
+        ftxui::Node::SetBox(box);
+        children_[0]->SetBox(box);
+    }
+
+    private:
+    ftxui::Box& captured_box_;
+    };
+
+} // namespace last
+
+ftxui::Decorator capture_box(ftxui::Box& box) {
+    return [&box](ftxui::Element child) -> ftxui::Element {
+        return std::make_shared<BoxCapture>(std::move(child), box);
+    };
+}
 
 
 // custom input styling variable.

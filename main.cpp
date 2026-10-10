@@ -224,14 +224,25 @@ int main(int argc, char* argv[]) {
     // left panel or file explorer system.
     int previous_left_panel_width = left_panel_width;
 
-    // Wheel-scroll offset of the explorer while it does NOT own the focus.
-    // 0.0 = top, 1.0 = bottom. Read by the renderer below.
+    // free wheel-scroll offset of the explorer. 0.0 = top, 1.0 = bottom.
+    // The wheel drives the *view* only; it must never move the selection.
     float explorer_scroll_y = 0.0f;
 
-    // Screen region occupied by the explorer. CatchEvent intercepts events
+    // true once the user scrolled with the wheel; the view then stops
+    // following the selection until the selection itself changes.
+    bool explorer_free_scrolled = false;
+    bool previous_panel_focused = false;
+    std::string previous_selected_file_path;
+
+    // screen region occupied by the explorer. CatchEvent intercepts events
     // regardless of the cursor position, so we reflect the explorer's box to
     // route mouse-wheel events to the correct pane.
     ftxui::Box left_panel_box;
+
+    // full (potentially larger than the viewport) box of the explorer content.
+    // Used, together with the reflected per-row boxes, to keep the view
+    // aligned with the selected row.
+    ftxui::Box left_panel_content_box;
 
     auto left_panel = ftxui::Renderer(left_panel_button_file_container, [&] {
         if (left_panel_width != previous_left_panel_width) { // if the previous panel width is no longer equal to the current panel width then update the display of the left panel.
@@ -244,22 +255,38 @@ int main(int argc, char* argv[]) {
             opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0, content_already_read);
         }
 
-        ftxui::Element entries = left_panel_button_file_container->Render();
+        ftxui::Element entries = left_panel_button_file_container->Render() | capture_box(left_panel_content_box);
 
-        // `frame` scrolls to keep the *focused* entry visible. When the explorer
-        // is unfocused there is no such entry, so drive the view from
-        // `explorer_scroll_y` instead. Without this the wheel updates the float
-        // but the view never moves.
-        if (left_panel_button_file_container->Focused()) {
-            // Keep the free-scroll offset roughly aligned with the selection so
-            // losing focus does not jump the view to the top.
-            const int count = static_cast<int>(left_panel_button_file_container->ChildCount());
-            auto active = left_panel_button_file_container->ActiveChild();
-            const int index = active ? active->Index() : 0;
-            explorer_scroll_y = count > 1
-                ? static_cast<float>(index) / static_cast<float>(count - 1)
-                : 0.0f;
-        } else {
+        const bool panel_focused = left_panel_button_file_container->Focused();
+
+        if (panel_focused && !previous_panel_focused) {
+            // just gained focus: follow the selection again.
+            explorer_free_scrolled = false;
+            previous_selected_file_path = left_panel_selected_file_path;
+        }
+        if (panel_focused && left_panel_selected_file_path != previous_selected_file_path) {
+            // the selection changed (keyboard or click): follow it again.
+            previous_selected_file_path = left_panel_selected_file_path;
+            explorer_free_scrolled = false;
+        }
+        previous_panel_focused = panel_focused;
+
+        // while the frame follows the selection, keep the free-scroll offset in
+        // sync with the selected row so that starting to wheel (or losing
+        // focus) does not jump the view.
+        if (panel_focused && !explorer_free_scrolled) {
+            const auto it = left_panel_row_boxes.find(left_panel_selected_file_path);
+            const int span = left_panel_content_box.y_max - left_panel_content_box.y_min;
+            if (it != left_panel_row_boxes.end() && span > 0) {
+                const int row = it->second.y_min - left_panel_content_box.y_min;
+                explorer_scroll_y = std::clamp(
+                    static_cast<float>(row) / static_cast<float>(span), 0.0f, 1.0f);
+            }
+        }
+
+        // native focus following is used while the selection drives the view;
+        // otherwise the view is driven by `explorer_scroll_y`.
+        if (!panel_focused || explorer_free_scrolled) {
             entries = entries | ftxui::focusPositionRelative(0.0f, explorer_scroll_y);
         }
 
@@ -347,21 +374,13 @@ int main(int argc, char* argv[]) {
             return false;
         }
 
-        if (left_panel_button_file_container->Focused()) {
-            // the explorer owns focus: a wheel tick behaves like an arrow key,
-            // moving the selection. The frame follows the selected entry, so
-            // the view scrolls together with it.
-            for (int i = 0; i < get_mouse_sensitivity(); i++) {
-                left_panel_button_file_container->OnEvent(wheel_up ? ftxui::Event::ArrowUp : ftxui::Event::ArrowDown);
-            }
-        } else {
-            // the explorer is unfocused: scroll the view freely without
-            // stealing focus from the editor.
-            const float step = 0.03f * static_cast<float>(get_mouse_sensitivity());
-            explorer_scroll_y += wheel_up ? -step : step;
-            explorer_scroll_y = std::max(0.0f, std::min(1.0f, explorer_scroll_y));
-            screen->PostEvent(ftxui::Event::Custom);
-        }
+        // scroll the view freely. This must never move the selection/focus, so
+        // the wheel no longer forwards arrow keys to the container.
+        explorer_free_scrolled = true;
+        const float step = 0.03f * static_cast<float>(get_mouse_sensitivity());
+        explorer_scroll_y += wheel_up ? -step : step;
+        explorer_scroll_y = std::max(0.0f, std::min(1.0f, explorer_scroll_y));
+        screen->PostEvent(ftxui::Event::Custom);
 
         return true;
     });

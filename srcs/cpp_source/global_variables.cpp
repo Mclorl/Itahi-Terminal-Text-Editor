@@ -19,6 +19,10 @@ std::string long_active_file_name = "";
 
 std::unordered_set<std::string> opened_folders;
 
+// Left panel (explorer) selection tracking.
+std::string left_panel_selected_file_path = "";
+std::map<std::string, ftxui::Box> left_panel_row_boxes;
+
 std::string current_events = "System Ready. Select a menu above.";
 
 // mouse sensitivity

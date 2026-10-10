@@ -19,13 +19,9 @@
 
 #include "../library/functions.hpp"
 
-namespace fs = std::filesystem;
+#include "../library/custom_styling.hpp"
 
-// path of the file that currently owns the selection in the explorer. FTXUI
-// only reports `focused` while the panel actually has focus, so we cache the
-// last focused/selected entry here and re-apply its highlight after the focus
-// moves away (e.g. the user is typing in the main content).
-static std::string left_panel_selected_file_path;
+namespace fs = std::filesystem;
 
 std::string truncate_name(const std::string& name, int available_width, std::string path) {
     if (available_width <= 0) {
@@ -123,6 +119,10 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
             if (is_selected) {
                 e = ftxui::color(ftxui::Color::Orange1, e);
             }
+
+            // remember this row's screen box so the view can be scrolled to it
+            // independently of the selection (see main.cpp).
+            e = e | capture_box(left_panel_row_boxes[p.string()]);
 
             screen->PostEvent(ftxui::Event::Custom);
             

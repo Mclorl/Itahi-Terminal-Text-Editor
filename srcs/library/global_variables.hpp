@@ -2,10 +2,12 @@
 
 #include <string>
 #include <unordered_set>
+#include <map>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 
 // global screen
 extern ftxui::ScreenInteractive* screen;
@@ -26,6 +28,13 @@ extern std::string active_file_saved;
 extern std::string long_active_file_name;
 
 extern std::unordered_set<std::string> opened_folders;
+
+// left panel (explorer) selection tracking.
+// `left_panel_selected_file_path` is the file that currently owns the
+// selection; `left_panel_row_boxes` maps every file row to its last rendered
+// screen box so the view can be scrolled independently of the selection.
+extern std::string left_panel_selected_file_path;
+extern std::map<std::string, ftxui::Box> left_panel_row_boxes;
 
 // bottom event response. Will be change later for command input.
 extern std::string current_events;

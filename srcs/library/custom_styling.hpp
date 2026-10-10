@@ -3,8 +3,15 @@
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/box.hpp>
 
 #include <unordered_set>
+
+// records the box assigned to an element during layout, without clipping it to
+// the visible viewport (unlike `ftxui::reflect`). Used to keep the explorer's
+// full content box / per-row boxes so the view can be scrolled independently of
+// the selection.
+ftxui::Decorator capture_box(ftxui::Box& box);
 
 // custom input styling variable.
 extern int cursor_index;
