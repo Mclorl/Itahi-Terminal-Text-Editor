@@ -352,8 +352,7 @@ int main(int argc, char* argv[]) {
             // moving the selection. The frame follows the selected entry, so
             // the view scrolls together with it.
             for (int i = 0; i < get_mouse_sensitivity(); i++) {
-                left_panel_button_file_container->OnEvent(
-                    wheel_up ? ftxui::Event::ArrowUp : ftxui::Event::ArrowDown);
+                left_panel_button_file_container->OnEvent(wheel_up ? ftxui::Event::ArrowUp : ftxui::Event::ArrowDown);
             }
         } else {
             // the explorer is unfocused: scroll the view freely without

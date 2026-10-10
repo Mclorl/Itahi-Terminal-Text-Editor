@@ -21,6 +21,12 @@
 
 namespace fs = std::filesystem;
 
+// path of the file that currently owns the selection in the explorer. FTXUI
+// only reports `focused` while the panel actually has focus, so we cache the
+// last focused/selected entry here and re-apply its highlight after the focus
+// moves away (e.g. the user is typing in the main content).
+static std::string left_panel_selected_file_path;
+
 std::string truncate_name(const std::string& name, int available_width, std::string path) {
     if (available_width <= 0) {
         return {};
@@ -88,12 +94,36 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
         
         ftxui::ButtonOption left_panel_file_styling_local = styling();
 
-        left_panel_file_styling_local.transform = [p](const ftxui::EntryState& current_state) {
+        // Raw pointer to the container owning this button. A raw pointer is used
+        // on purpose: capturing the shared_ptr would create a reference cycle
+        // (container -> button -> transform -> container). The container always
+        // outlives its children, so this is safe.
+        ftxui::ComponentBase* owner = container.get();
+
+        left_panel_file_styling_local.transform = [p, owner](const ftxui::EntryState& current_state) {
+            // Only the row that genuinely owns the selection updates the cache.
+            // `active` is used instead of `focused`, because FTXUI reports
+            // `focused` for hovered rows too; combined with `owner->Focused()`
+            // this means hovering the explorer while the focus is in the main
+            // content no longer overwrites the cached selection.
+            if (current_state.active && owner->Focused()) {
+                left_panel_selected_file_path = p.string();
+            }
+
+            const bool is_selected = left_panel_selected_file_path == p.string();
+
             ftxui::Element e; // the spaces here is just temporary.
             // soon add a function if the code has error then turn this to red.
             std::string file_display_name = current_state.label;
             file_display_name.erase(file_unsaved_status[p.string()] && file_truncate_name_bool_status[p.string()] ? file_display_name.length() - 1 : file_display_name.length());
-            e = file_unsaved_status[p.string()] ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + file_display_name + "*")) : ftxui::text("  " + current_state.label + "");
+            e = file_unsaved_status[p.string()] && !is_selected ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + file_display_name + "*")) : file_unsaved_status[p.string()] && is_selected ? ftxui::text("  " + file_display_name + "*") : ftxui::text("  " + current_state.label + "");
+
+            // the selected file stays orange even when the explorer is not
+            // focused, so the user can still see it while editing.
+            if (is_selected) {
+                e = ftxui::color(ftxui::Color::Orange1, e);
+            }
+
             screen->PostEvent(ftxui::Event::Custom);
             
             if (current_state.focused) {
