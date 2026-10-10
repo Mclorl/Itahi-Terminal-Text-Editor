@@ -138,8 +138,8 @@ int main(int argc, char* argv[]) {
                     ftxui::flex(
                         ftxui::border(
                             ftxui::vbox(
-                                ftxui::vscroll_indicator(
-                                    ftxui::frame(
+                                ftxui::frame(
+                                    ftxui::vscroll_indicator(
                                         ftxui::hbox({
                                             file_content_count_component(content, show_line_numbers, cursor_index, underline_active_row_on_numbers)->Render(),
                                             SEPARATOR_TRANSPARENT,
@@ -224,6 +224,15 @@ int main(int argc, char* argv[]) {
     // left panel or file explorer system.
     int previous_left_panel_width = left_panel_width;
 
+    // Wheel-scroll offset of the explorer while it does NOT own the focus.
+    // 0.0 = top, 1.0 = bottom. Read by the renderer below.
+    float explorer_scroll_y = 0.0f;
+
+    // Screen region occupied by the explorer. CatchEvent intercepts events
+    // regardless of the cursor position, so we reflect the explorer's box to
+    // route mouse-wheel events to the correct pane.
+    ftxui::Box left_panel_box;
+
     auto left_panel = ftxui::Renderer(left_panel_button_file_container, [&] {
         if (left_panel_width != previous_left_panel_width) { // if the previous panel width is no longer equal to the current panel width then update the display of the left panel.
             previous_left_panel_width = left_panel_width;
@@ -235,19 +244,38 @@ int main(int argc, char* argv[]) {
             opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0, content_already_read);
         }
 
+        ftxui::Element entries = left_panel_button_file_container->Render();
+
+        // `frame` scrolls to keep the *focused* entry visible. When the explorer
+        // is unfocused there is no such entry, so drive the view from
+        // `explorer_scroll_y` instead. Without this the wheel updates the float
+        // but the view never moves.
+        if (left_panel_button_file_container->Focused()) {
+            // Keep the free-scroll offset roughly aligned with the selection so
+            // losing focus does not jump the view to the top.
+            const int count = static_cast<int>(left_panel_button_file_container->ChildCount());
+            auto active = left_panel_button_file_container->ActiveChild();
+            const int index = active ? active->Index() : 0;
+            explorer_scroll_y = count > 1
+                ? static_cast<float>(index) / static_cast<float>(count - 1)
+                : 0.0f;
+        } else {
+            entries = entries | ftxui::focusPositionRelative(0.0f, explorer_scroll_y);
+        }
+
         return ftxui::border(
             ftxui::vbox({
                 ftxui::bold(
                     ftxui::text("Explorer")
                 ),
                 ftxui::separator(),
-                ftxui::vscroll_indicator(
-                    ftxui::frame(
-                        left_panel_button_file_container->Render() 
+                ftxui::frame(
+                    ftxui::vscroll_indicator(
+                        entries
                     )
                 ),
             })
-        ) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_panel_width);
+        ) | ftxui::reflect(left_panel_box) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_panel_width);
     });
 
     auto main_content = ftxui::Renderer(main_content_container, [&] {
@@ -307,23 +335,36 @@ int main(int argc, char* argv[]) {
 
         const auto mouse = event.mouse();
 
-        if (mouse.button == ftxui::Mouse::WheelUp) {
-            for (int i = 0; i < get_mouse_sensitivity(); i++) {
-                left_panel_button_file_container->OnEvent(ftxui::Event::ArrowUp);
-            }
-
-            return true;
+        if (mouse.button != ftxui::Mouse::WheelUp && mouse.button != ftxui::Mouse::WheelDown) {
+            return false;
         }
 
-        if (mouse.button == ftxui::Mouse::WheelDown) {
-            for (int i = 0; i < get_mouse_sensitivity(); i++) {
-                left_panel_button_file_container->OnEvent(ftxui::Event::ArrowDown);
-            }
+        const bool wheel_up = mouse.button == ftxui::Mouse::WheelUp;
 
-            return true;
+        // only react when the cursor is actually over the explorer, otherwise
+        // let the wheel fall through to the editor.
+        if (!left_panel_box.Contain(mouse.x, mouse.y)) {
+            return false;
         }
 
-        return false;
+        if (left_panel_button_file_container->Focused()) {
+            // the explorer owns focus: a wheel tick behaves like an arrow key,
+            // moving the selection. The frame follows the selected entry, so
+            // the view scrolls together with it.
+            for (int i = 0; i < get_mouse_sensitivity(); i++) {
+                left_panel_button_file_container->OnEvent(
+                    wheel_up ? ftxui::Event::ArrowUp : ftxui::Event::ArrowDown);
+            }
+        } else {
+            // the explorer is unfocused: scroll the view freely without
+            // stealing focus from the editor.
+            const float step = 0.03f * static_cast<float>(get_mouse_sensitivity());
+            explorer_scroll_y += wheel_up ? -step : step;
+            explorer_scroll_y = std::max(0.0f, std::min(1.0f, explorer_scroll_y));
+            screen->PostEvent(ftxui::Event::Custom);
+        }
+
+        return true;
     });
 
     // default.
@@ -355,14 +396,18 @@ int main(int argc, char* argv[]) {
         if (event.is_mouse()) {
             auto mouse = event.mouse();
 
-            if (mouse.button == ftxui::Mouse::WheelUp) {
+            // If the cursor is over the explorer, let the event fall through to
+            // `body_split` so the inner `scrollable_left_panel` can handle it.
+            const bool over_explorer = left_panel_box.Contain(mouse.x, mouse.y);
+
+            if (!over_explorer && mouse.button == ftxui::Mouse::WheelUp) {
                 for (int i = 0; i < get_mouse_sensitivity(); i++) {
                     main_content->OnEvent(ftxui::Event::ArrowUp);
                 }
                 return true;
             }
 
-            if (mouse.button == ftxui::Mouse::WheelDown) {
+            if (!over_explorer && mouse.button == ftxui::Mouse::WheelDown) {
                 for (int i = 0; i < get_mouse_sensitivity(); i++) {
                     main_content->OnEvent(ftxui::Event::ArrowDown);
                 }
