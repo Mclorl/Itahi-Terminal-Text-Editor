@@ -27,6 +27,8 @@
 
 #include "functions.hpp"
 
+#include "terminal_handling.hpp"
+
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
@@ -471,7 +473,9 @@ int main(int argc, char* argv[]) {
         });
     });
 
-    screen->Loop(document);
+    ftxui::Component complete_document = key_listener_function(*screen, document);
+
+    screen->Loop(complete_document);
 
     return 0;
 }
