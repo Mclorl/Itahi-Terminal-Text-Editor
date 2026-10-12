@@ -70,4 +70,7 @@ extern std::unordered_map<std::string, bool> has_unsaved_file_inside_directory;
 extern std::unordered_map<std::string, std::string> content_read_first;
 extern std::unordered_map<std::string, std::string> content_user_updated;
 
-
+// global bool modes
+extern bool is_normal_mode;
+extern bool is_edit_mode;
+extern bool is_command_mode;

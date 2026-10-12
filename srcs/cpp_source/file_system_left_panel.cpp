@@ -132,7 +132,7 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
             return e;
         };
 
-        auto button = ftxui::Button(display_name, [p, file_name, &content_already_read_local, &content_main_user_updated , &long_active_file_name_local]() {
+        auto button = ftxui::Button(display_name, [p, file_name, &content_already_read_local, &content_main_user_updated , &long_active_file_name_local, &active_file]() {
             // callback when a file entry button is clicked
             
             // change status to already read file.
@@ -149,6 +149,13 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
             active_file_not_saved = file_name + "*";
             active_file_saved = file_name;
             long_active_file_name_local = p.string();
+
+            active_file = file_unsaved_status[p.string()] ? active_file_not_saved : active_file_saved;
+            if (screen) {
+                screen->PostEvent(ftxui::Event::Custom);
+            }
+
+
         }, left_panel_file_styling_local);
 
         array.push_back(button);

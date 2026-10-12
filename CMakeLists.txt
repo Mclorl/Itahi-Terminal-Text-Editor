@@ -21,6 +21,7 @@ add_library(my_library # libraries that needed to be compiled.
   srcs/cpp_source/functions.cpp
   srcs/cpp_source/tab_contents.cpp
   srcs/cpp_source/global_variables.cpp
+  srcs/cpp_source/mode.cpp
   srcs/cpp_source/terminal_handling.cpp
 
 
@@ -34,6 +35,7 @@ add_library(my_library # libraries that needed to be compiled.
   srcs/library/sets_of_tools.hpp
   srcs/library/functions.hpp
   srcs/library/terminal_handling.hpp
+  srcs/library/mode.hpp
 )
  
 add_executable(main  # executable only one for now.

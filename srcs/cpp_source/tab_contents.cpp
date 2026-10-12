@@ -41,7 +41,11 @@ ftxui::Component top_bar(std::string &active_file) {
             ),
             ftxui::flex(
                 ftxui::hbox({SEPARATOR_TRANSPARENT})
-            )
+            ),
+            is_normal_mode ?    ftxui::bold(ftxui::text(" -- NORMAL --")) : 
+            is_edit_mode ?      ftxui::bold(ftxui::text("   -- EDIT --")) :
+            is_command_mode ?   ftxui::bold(ftxui::text("-- COMMAND --")) :
+                                ftxui::bold(ftxui::text(""))
         });
     });
 }

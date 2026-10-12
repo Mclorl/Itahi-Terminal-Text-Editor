@@ -155,9 +155,9 @@ ftxui::ButtonOption left_panel_directory_styling() {
 
 // numeric input custom
 ftxui::Component make_numeric_input_row(std::string& target_var, std::string label_text, int max_digits_taken, int max_width) {
-    ftxui::Component input_comp = ftxui::Input(&target_var, "");
+    ftxui::Component input_num = ftxui::Input(&target_var, "");
 
-    input_comp |= ftxui::CatchEvent([&target_var, max_digits_taken](ftxui::Event event) {
+    input_num |= ftxui::CatchEvent([&target_var, max_digits_taken](ftxui::Event event) {
 
         // Block Enter key 
         if (event == ftxui::Event::Return) {
@@ -182,11 +182,11 @@ ftxui::Component make_numeric_input_row(std::string& target_var, std::string lab
         return false;
     });
 
-    return ftxui::Renderer(input_comp, [input_comp, label_text, max_digits_taken, max_width]() {
+    return ftxui::Renderer(input_num, [input_num, label_text, max_digits_taken, max_width]() {
         return ftxui::hbox({
             ftxui::text(label_text),
             ftxui::underlined(
-                ftxui::size(ftxui::WIDTH, ftxui::EQUAL, max_width)(input_comp->Render())
+                ftxui::size(ftxui::WIDTH, ftxui::EQUAL, max_width)(input_num->Render())
             )
         });
     });

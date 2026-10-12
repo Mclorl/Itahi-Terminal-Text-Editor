@@ -41,6 +41,11 @@ ftxui::Component key_listener_function(ftxui::ScreenInteractive &screen, ftxui::
             screen.ExitLoopClosure()();
             return true;
         }
+
+        // if (event == ftxui::Event::Special("\x1B")) {
+        //     current_events = "you are pressing ESC";
+        //     return true;
+        // }
         return false;
     });
 }
