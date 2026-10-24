@@ -37,6 +37,21 @@ namespace {
     ftxui::Box& captured_box_;
     };
 
+    // single line inputs: Up/Down are not given to the Input (it would use
+    // them to jump to the start/end of the text) so the parent container moves
+    // to the previous/next row in one key press.
+    class PassVerticalArrows : public ftxui::ComponentBase {
+    public:
+    explicit PassVerticalArrows(ftxui::Component child) { Add(std::move(child)); }
+
+    bool OnEvent(ftxui::Event event) override {
+        if (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown) {
+            return false;
+        }
+        return ftxui::ComponentBase::OnEvent(event);
+    }
+    };
+
 } // namespace last
 
 ftxui::Decorator capture_box(ftxui::Box& box) {
@@ -181,6 +196,8 @@ ftxui::Component make_numeric_input_row(std::string& target_var, std::string lab
         }
         return false;
     });
+
+    input_num = std::make_shared<PassVerticalArrows>(input_num);
 
     return ftxui::Renderer(input_num, [input_num, label_text, max_digits_taken, max_width]() {
         return ftxui::hbox({

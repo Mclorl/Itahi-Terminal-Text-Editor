@@ -1,4 +1,7 @@
+#include <algorithm>
 #include <iostream>
+
+#include <ftxui/screen/string.hpp>
 
 #include "../library/functions.hpp"
 
@@ -56,6 +59,10 @@ ftxui::Component toggle_linenums_func() {
 ftxui::Component toggle_underline_active_row_on_numbers_func() {
     return ftxui::Checkbox("Show Underline On Active Row On Numbers", &underline_active_row_on_numbers, create_plain_checkbox_option());
 }
+
+ftxui::Component toggle_syntax_highlighting_func() {
+    return ftxui::Checkbox("Enable Syntax Highlighting", &syntax_highlighting, create_plain_checkbox_option());
+}
 // ftxui::Component toggle_statusbar = ftxui::Checkbox("Show Status Bar", &show_status_bar, create_plain_checkbox_option());
 
 // --- Terminal Menu Choices ---
@@ -71,6 +78,9 @@ ftxui::Component toggle_underline_active_row_on_numbers_func() {
 // --- Settings Menu Choices ---
 ftxui::Component mouse_sens_row_func() {
     return make_numeric_input_row(mouse_sensitivity, "Mouse Sensitivity: ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
+}
+ftxui::Component tab_size_row_func() {
+    return make_numeric_input_row(tab_size, "Tab Size (spaces): ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
 }
 // --- Help Menu Choices ---
 ftxui::Component btn_about_func() {
@@ -101,6 +111,16 @@ int get_mouse_sensitivity() {
     }
 }
 
+// tab size input fallback function (1 - 16, default 4).
+int get_tab_size() {
+    try {
+        const int size = tab_size.empty() ? 4 : std::stoi(tab_size);
+        return size < 1 ? 4 : std::min(size, 16);
+    } catch (const std::exception&) {
+        return 4;
+    }
+}
+
 namespace {
 
     // callback and the mode handler below.
@@ -119,6 +139,52 @@ namespace {
     void set_normal_mode() { is_normal_mode = true;  is_edit_mode = false; is_command_mode = false; }
     void set_insert_mode() { is_normal_mode = false; is_edit_mode = true;  is_command_mode = false; }
 
+    // byte offset where the line holding byte `index` starts.
+    std::size_t line_start_of(const std::string &content, int index) {
+        if (index <= 0) {
+            return 0;
+        }
+        const std::size_t newline = content.rfind('\n', static_cast<std::size_t>(index - 1));
+        return newline == std::string::npos ? 0 : newline + 1;
+    }
+
+    // Tab: insert spaces up to the next tab stop, like other editors. Spaces,
+    // not '\t': the editor can't display tab characters.
+    void insert_indent(std::string &content, int &cursor_index) {
+        const int size = get_tab_size();
+        cursor_index = std::clamp(cursor_index, 0, static_cast<int>(content.size()));
+
+        const std::size_t start = line_start_of(content, cursor_index);
+        const int column = ftxui::string_width(content.substr(start, cursor_index - start));
+        const int spaces = size - column % size;
+
+        content.insert(static_cast<std::size_t>(cursor_index), static_cast<std::size_t>(spaces), ' ');
+        cursor_index += spaces;
+    }
+
+    // Shift+Tab: remove one indent level (a tab, or up to tab-size spaces)
+    // from the start of the current line.
+    void remove_indent(std::string &content, int &cursor_index) {
+        const int size = get_tab_size();
+        cursor_index = std::clamp(cursor_index, 0, static_cast<int>(content.size()));
+
+        const std::size_t start = line_start_of(content, cursor_index);
+        std::size_t count = 0;
+        if (start < content.size() && content[start] == '\t') {
+            count = 1;
+        } else {
+            while (count < static_cast<std::size_t>(size) && start + count < content.size() && content[start + count] == ' ') {
+                count++;
+            }
+        }
+        if (count == 0) {
+            return;
+        }
+
+        content.erase(start, count);
+        cursor_index = std::max(static_cast<int>(start), cursor_index - static_cast<int>(count));
+    }
+
 
 }  // namespace
 
@@ -136,11 +202,22 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
     ftxui::ComponentBase* input_ptr = main_user_input.get();
 
     // normal-mode key handling.
-    return ftxui::CatchEvent(main_user_input, [&content, input_ptr](ftxui::Event event) {
+    return ftxui::CatchEvent(main_user_input, [&content, &cursor_index, input_ptr](ftxui::Event event) {
         // never swallow mouse events: the Input needs them to take focus (and
         // to place the cursor). Swallowing them is why the cursor vanished.
         if (event.is_mouse()) {
             return false;
+        }
+
+        // at a boundary (first/last line, start/end of the buffer) the Input
+        // can't move the cursor and reports the arrow as unhandled, so the
+        // parent containers would move focus out of the editor (up -> top bar,
+        // left -> explorer, ...). Always consume arrows, in every mode.
+        if (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown ||
+            event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight ||
+            event == ftxui::Event::ArrowLeftCtrl || event == ftxui::Event::ArrowRightCtrl) {
+            input_ptr->OnEvent(event);
+            return true;
         }
 
         // --- Edit mode ---
@@ -150,6 +227,24 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
             // Insert mode: type normally. Escape goes back to normal mode.
             if (event == ftxui::Event::Escape) {
                 set_normal_mode();
+                return true;
+            }
+            // some terminals send Ctrl+H (0x08) for the Backspace key. FTXUI is
+            // patched to keep Ctrl+H separate, so map it back here while typing.
+            if (event == ftxui::Event::CtrlH) {
+                input_ptr->OnEvent(ftxui::Event::Backspace);
+                return true;
+            }
+            // Tab / Shift+Tab indent and unindent. Without this the Input
+            // ignores them and the containers move the focus away instead.
+            if (event == ftxui::Event::Tab) {
+                insert_indent(content, cursor_index);
+                refresh_unsaved_status(content);
+                return true;
+            }
+            if (event == ftxui::Event::TabReverse) {
+                remove_indent(content, cursor_index);
+                refresh_unsaved_status(content);
                 return true;
             }
             return false;  // forwarded to the Input
@@ -171,7 +266,7 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
             return true;
         }
 
-        // Real arrows / Home / End / Page keys keep working (forwarded).
+        // Home / End / Page keys keep working (forwarded).
         // Printable characters and editing keys are consumed so normal mode
         // can never modify the buffer.
         if (event.is_character() || event == ftxui::Event::Return || event == ftxui::Event::Backspace || event == ftxui::Event::Delete) {
@@ -183,21 +278,18 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
 }
 
 bool check_content_directory_for_unsaved_file(std::string path) {
-    std::string directory_path = iterate_current_path_shallow(path);
+    // only files opened in the editor can be unsaved, and their status is
+    // already in memory: look for one under this folder. (This runs on every
+    // render of every folder row; walking the folder on disk instead was very
+    // slow for big folders such as build/.)
+    if (path.empty() || path.back() != '/') {
+        path += '/';
+    }
 
-    std::stringstream s(directory_path);
-    std::string line;
-
-    while (std::getline(s, line)) {
-        if (fs::is_directory(line)) {
-            if (check_content_directory_for_unsaved_file(line)) {
-                return true;
-            }
-        }
-
-        if (file_unsaved_status[line] && fs::is_regular_file(line)) {
+    for (const auto& [file, unsaved] : file_unsaved_status) {
+        if (unsaved && file.compare(0, path.size(), path) == 0) {
             return true;
-        } 
+        }
     }
 
     return false;

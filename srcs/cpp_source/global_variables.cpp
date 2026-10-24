@@ -28,6 +28,9 @@ std::string current_events = "System Ready. Select a menu above.";
 // mouse sensitivity
 std::string mouse_sensitivity = "3";
 
+// spaces inserted by Tab in edit mode
+std::string tab_size = "4";
+
 // app settings. Interactive Toggles default
 
 // -- edit -- 
@@ -39,6 +42,7 @@ std::string mouse_sensitivity = "3";
 bool auto_save = false;
 bool show_line_numbers = true;
 bool underline_active_row_on_numbers = false;
+bool syntax_highlighting = true;
 // bool show_status_bar = true;
 
 // data

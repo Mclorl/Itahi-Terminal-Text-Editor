@@ -102,21 +102,29 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
             // `focused` for hovered rows too; combined with `owner->Focused()`
             // this means hovering the explorer while the focus is in the main
             // content no longer overwrites the cached selection.
-            if (current_state.active && owner->Focused()) {
+            if (current_state.active && owner->Focused() && left_panel_selected_file_path != p.string()) {
                 left_panel_selected_file_path = p.string();
+                // the view follows the selection using the row boxes measured
+                // during layout, ie. one frame late: ask for that one extra
+                // frame. (Only on a change: posting on every render made the
+                // app redraw non-stop at 100% CPU.)
+                screen->PostEvent(ftxui::Event::Custom);
             }
 
-            const bool is_selected = left_panel_selected_file_path == p.string();
+            // the color follows the file that is open in the editor, not the
+            // keyboard selection: moving through the explorer with the arrows
+            // only makes the row bold (same as hovering with the mouse).
+            const bool is_open_in_editor = long_active_file_name == p.string();
 
             ftxui::Element e; // the spaces here is just temporary.
             // soon add a function if the code has error then turn this to red.
             std::string file_display_name = current_state.label;
             file_display_name.erase(file_unsaved_status[p.string()] && file_truncate_name_bool_status[p.string()] ? file_display_name.length() - 1 : file_display_name.length());
-            e = file_unsaved_status[p.string()] && !is_selected ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + file_display_name + "*")) : file_unsaved_status[p.string()] && is_selected ? ftxui::text("  " + file_display_name + "*") : ftxui::text("  " + current_state.label + "");
+            e = file_unsaved_status[p.string()] && !is_open_in_editor ? ftxui::color(ftxui::Color::Yellow1, ftxui::text("  " + file_display_name + "*")) : file_unsaved_status[p.string()] && is_open_in_editor ? ftxui::text("  " + file_display_name + "*") : ftxui::text("  " + current_state.label + "");
 
-            // the selected file stays orange even when the explorer is not
+            // the opened file stays orange even when the explorer is not
             // focused, so the user can still see it while editing.
-            if (is_selected) {
+            if (is_open_in_editor) {
                 e = ftxui::color(ftxui::Color::Orange1, e);
             }
 
@@ -124,8 +132,6 @@ void opened_directory_file_entry(ftxui::Component container, std::vector<ftxui::
             // independently of the selection (see main.cpp).
             e = e | capture_box(left_panel_row_boxes[p.string()]);
 
-            screen->PostEvent(ftxui::Event::Custom);
-            
             if (current_state.focused) {
                 return ftxui::bold(e);
             }

@@ -29,6 +29,8 @@
 
 #include "terminal_handling.hpp"
 
+#include "syntax_highlight.hpp"
+
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
@@ -74,8 +76,11 @@ int main(int argc, char* argv[]) {
 
     ftxui::Component toggle_linenums = toggle_linenums_func();
     ftxui::Component toggle_underline_active_row_on_numbers = toggle_underline_active_row_on_numbers_func();
+    ftxui::Component toggle_syntax_highlighting = toggle_syntax_highlighting_func();
+    ftxui::Component syntax_color_settings = syntax_color_settings_func();
 
     ftxui::Component mouse_sens_row = mouse_sens_row_func();
+    ftxui::Component tab_size_row = tab_size_row_func();
 
     ftxui::Component warning_text_link_direct = warning_text_link_direct_func();
     ftxui::Component btn_about = btn_about_func();
@@ -107,6 +112,8 @@ int main(int argc, char* argv[]) {
     ftxui::Component view_tab_container = ftxui::Container::Vertical({
         toggle_linenums,
         toggle_underline_active_row_on_numbers,
+        toggle_syntax_highlighting,
+        syntax_color_settings,
         //toggle_statusbar,
     });
 
@@ -119,7 +126,7 @@ int main(int argc, char* argv[]) {
     // --- Settings Menu Choices ---
     ftxui::Component settings_tab_container = ftxui::Container::Vertical({
         mouse_sens_row,
-        // tab_size_row, // Just add more column 
+        tab_size_row,
     });
 
     // --- Help Menu Choices ---
@@ -145,7 +152,7 @@ int main(int argc, char* argv[]) {
                                         ftxui::hbox({
                                             file_content_count_component(content, show_line_numbers, cursor_index, underline_active_row_on_numbers)->Render(),
                                             SEPARATOR_TRANSPARENT,
-                                            input_component->Render()
+                                            input_component->Render() | syntax_highlight(content, long_active_file_name)
                                         })
                                     )
                                 )
@@ -310,6 +317,13 @@ int main(int argc, char* argv[]) {
     auto main_content = ftxui::Renderer(main_content_container, [&] {
 
         if (status == 1) {
+            // the "<-" button isn't drawn in this view: once it closed the menu
+            // make the editor the active child, so keys go there instead of to
+            // a hidden button. (Local to this container: never steals the focus
+            // from the explorer or the top bar.)
+            if (main_content_container->ActiveChild() == file_back_button_container) {
+                main_content_container->SetActiveChild(tab_content.get());
+            }
             return tab_content->Render();
         }
         if (status == 2) {
@@ -408,7 +422,20 @@ int main(int argc, char* argv[]) {
         body_split = main_content;
     } else {
         // directory mode (or no args): show explorer panel on the left
-        body_split = ftxui::ResizableSplitLeft(scrollable_left_panel, main_content, &left_panel_width);
+        // custom separator: a vertical line with a "⋮" grip in the middle (like vscode)
+        ftxui::ResizableSplitOption split_option;
+        split_option.main = scrollable_left_panel;
+        split_option.back = main_content;
+        split_option.direction = ftxui::Direction::Left;
+        split_option.main_size = &left_panel_width;
+        split_option.separator_func = [] {
+            return ftxui::vbox({
+                ftxui::flex(SEPARATOR_TRANSPARENT),
+                ftxui::bold(ftxui::text("⋮")),
+                ftxui::flex(SEPARATOR_TRANSPARENT),
+            });
+        };
+        body_split = ftxui::ResizableSplit(split_option);
     }
 
     auto constrained_split = ftxui::CatchEvent(body_split, [&](ftxui::Event event) {
@@ -455,7 +482,61 @@ int main(int argc, char* argv[]) {
         constrained_split,
     });
 
-    auto document = ftxui::Renderer(main_container, [&] {
+    // normal mode panel navigation: Ctrl+Arrow or Ctrl+H/J/K/L move the focus
+    // between the top bar, the explorer and the main content. Plain arrows
+    // keep moving inside the focused panel.
+    const bool has_explorer = body_split != main_content;
+    bool came_from_explorer = false;
+
+    auto panel_navigation = ftxui::CatchEvent(main_container, [&](ftxui::Event event) {
+        if (!is_normal_mode) {
+            return false;
+        }
+
+        // Ctrl+H and Ctrl+J only arrive as their own events thanks to
+        // patches/ftxui-ctrl-h-ctrl-j.patch (stock FTXUI merges them with
+        // Backspace and Enter). Ctrl+J comes in as a CSI-u style sequence.
+        const ftxui::Event ctrl_j = ftxui::Event::Special("\x1B[106;5u");
+
+        const bool go_left  = event == ftxui::Event::ArrowLeftCtrl  || event == ftxui::Event::CtrlH;
+        const bool go_right = event == ftxui::Event::ArrowRightCtrl || event == ftxui::Event::CtrlL;
+        const bool go_up    = event == ftxui::Event::ArrowUpCtrl    || event == ftxui::Event::CtrlK;
+        const bool go_down  = event == ftxui::Event::ArrowDownCtrl  || event == ctrl_j;
+
+        if (!go_left && !go_right && !go_up && !go_down) {
+            return false;
+        }
+
+        const bool in_top_bar  = top_bar_component->Focused();
+        const bool in_explorer = has_explorer && left_panel_button_file_container->Focused();
+
+        auto focus_explorer = [&] {
+            if (has_explorer && left_panel_button_file_container->Focusable()) {
+                left_panel_button_file_container->TakeFocus();
+            }
+        };
+
+        if (go_up && !in_top_bar) {
+            came_from_explorer = in_explorer;
+            top_bar_component->TakeFocus();
+        } else if (go_down && in_top_bar) {
+            if (came_from_explorer) {
+                focus_explorer();
+            } else {
+                tab_content->TakeFocus();
+            }
+        } else if (go_left && !in_top_bar && !in_explorer) {
+            focus_explorer();
+        } else if (go_right && in_explorer) {
+            tab_content->TakeFocus();
+        }
+
+        // always consumed in normal mode, even when there is nowhere to go,
+        // so the shortcut never falls through to the focused component.
+        return true;
+    });
+
+    auto document = ftxui::Renderer(panel_navigation, [&] {
         return ftxui::vbox({
             ftxui::color(ftxui::Color::GrayDark,
                 ftxui::color(ftxui::Color::White,

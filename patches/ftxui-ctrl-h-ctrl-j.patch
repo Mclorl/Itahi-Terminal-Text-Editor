@@ -1,0 +1,20 @@
+diff --git a/src/ftxui/component/terminal_input_parser.cpp b/src/ftxui/component/terminal_input_parser.cpp
+index 7212298c..eff868cc 100644
+--- a/src/ftxui/component/terminal_input_parser.cpp
++++ b/src/ftxui/component/terminal_input_parser.cpp
+@@ -23,8 +23,13 @@ const std::map<std::string, std::string> g_uniformize = {
+     // Here, we uniformize the new line character to `\n`.
+     {"\r", "\n"},
+ 
+-    // See: https://github.com/ArthurSonzogni/FTXUI/issues/508
+-    {std::string({8}), std::string({127})},
++    // Itahi: the raw-mode Enter key sends "\r", so a raw "\n" is Ctrl+J.
++    // Give it its own sequence (CSI-u style) instead of merging it with
++    // Enter, so the app can bind Ctrl+J.
++    {"\n", "\x1B[106;5u"},
++
++    // Itahi: the {8 -> 127} rewrite (issue #508) is removed so Ctrl+H (0x08)
++    // reaches the app as Event::CtrlH instead of Backspace.
+ 
+     // See: https://github.com/ArthurSonzogni/FTXUI/issues/626
+     //

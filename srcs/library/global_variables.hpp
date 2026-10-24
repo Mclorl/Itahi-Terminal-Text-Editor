@@ -40,6 +40,7 @@ extern std::map<std::string, ftxui::Box> left_panel_row_boxes;
 extern std::string current_events;
 
 extern std::string mouse_sensitivity;
+extern std::string tab_size;
 
 // app settings. Interactive Toggles default
 
@@ -52,6 +53,7 @@ extern std::string mouse_sensitivity;
 extern bool auto_save;
 extern bool show_line_numbers;
 extern bool underline_active_row_on_numbers;
+extern bool syntax_highlighting;
 // bool show_status_bar = true;
 
 // global content
