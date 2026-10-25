@@ -841,7 +841,14 @@ ftxui::Decorator syntax_highlight(const std::string& content, const std::string&
 ftxui::Component syntax_color_settings_func() {
     ftxui::Components rows;
     for (int group = 1; group < group_count; ++group) {
-        rows.push_back(std::make_shared<SyntaxColorRow>(static_cast<SyntaxGroup>(group)));
+        auto row = std::make_shared<SyntaxColorRow>(static_cast<SyntaxGroup>(group));
+
+        rows.push_back(ftxui::Renderer(row, [row] {
+            return ftxui::hbox({
+                ftxui::text("    "),// indent
+                row->Render(),
+            });
+        }));
     }
     ftxui::Component rows_container = ftxui::Container::Vertical(std::move(rows));
 
@@ -854,6 +861,7 @@ ftxui::Component syntax_color_settings_func() {
             ftxui::bold(ftxui::text("Syntax Colors")),
             ftxui::dim(ftxui::text("Current file: " + (language.empty() ? std::string("no highlighting") : language))),
             ftxui::dim(ftxui::text("Left / Right or click to change a color.")),
+            ftxui::text(""),
             rows_container->Render(),
         });
     });
