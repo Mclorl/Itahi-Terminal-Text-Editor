@@ -25,6 +25,12 @@ std::map<std::string, ftxui::Box> left_panel_row_boxes;
 
 std::string current_events = "System Ready. Select a menu above.";
 
+// command mode line
+std::string command_line = "";
+int command_cursor_index = 0;
+std::string command_output = "";
+std::string command_error = "";
+
 // mouse sensitivity
 std::string mouse_sensitivity = "3";
 
@@ -62,6 +68,8 @@ std::unordered_map<std::string, bool> has_unsaved_file_inside_directory;
 
 std::unordered_map<std::string, std::string> content_read_first;
 std::unordered_map<std::string, std::string> content_user_updated;
+
+std::unordered_set<std::string> files_opened_anyway;
 
 // global bool modes
 bool is_normal_mode = true; // default to false

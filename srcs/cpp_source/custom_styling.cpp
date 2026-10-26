@@ -172,7 +172,10 @@ ftxui::ButtonOption left_panel_directory_styling() {
 ftxui::Component make_numeric_input_row(std::string& target_var, std::string label_text, int max_digits_taken, int max_width) {
     ftxui::Component input_num = ftxui::Input(&target_var, "");
 
-    input_num |= ftxui::CatchEvent([&target_var, max_digits_taken](ftxui::Event event) {
+    // the label without its trailing ": " names the setting in the errors.
+    const std::string setting_name = label_text.substr(0, label_text.find_last_not_of(": ") + 1);
+
+    input_num |= ftxui::CatchEvent([&target_var, max_digits_taken, setting_name](ftxui::Event event) {
 
         // Block Enter key 
         if (event == ftxui::Event::Return) {
@@ -187,10 +190,12 @@ ftxui::Component make_numeric_input_row(std::string& target_var, std::string lab
 
             // blocks any character other than int
             if (!std::isdigit(static_cast<unsigned char>(event.character()[0]))) {
+                command_error = setting_name + " only accepts numbers";
                 return true;
             }
             // Stop accepting text inputs if the max_digits is reached
             if (target_var.size() >= max_digits_taken) {
+                command_error = setting_name + " accepts at most " + std::to_string(max_digits_taken) + " digits";
                 return true;
             }
         }

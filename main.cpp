@@ -31,6 +31,8 @@
 
 #include "syntax_highlight.hpp"
 
+#include "mode.hpp"
+
 namespace fs = std::filesystem;
 
 int main(int argc, char* argv[]) {
@@ -137,26 +139,119 @@ int main(int argc, char* argv[]) {
         btn_ftxui_about,
     });
 
+    // created further down, once the containers it gives the focus back to exist.
+    ftxui::Component command_line_component;
+
+    // vim-like bottom line, drawn inside the border of the main content: the
+    // command line while typing a command (with the error of a rejected
+    // command above it). Otherwise the last error (red) or result (dim)
+    // until the next key press.
+    auto command_line_element = [&] {
+        auto error_line = [] {
+            return ftxui::color(ftxui::Color::White,
+                ftxui::bgcolor(ftxui::Color::Red,
+                    ftxui::text(command_error)
+                )
+            );
+        };
+
+        if (is_command_mode) {
+            if (command_error.empty()) {
+                return command_line_component->Render();
+            }
+            return ftxui::vbox({
+                error_line(),
+                command_line_component->Render(),
+            });
+        }
+        if (!command_error.empty()) {
+            return error_line();
+        }
+        if (!command_output.empty()) {
+            return ftxui::dim(ftxui::text(command_output));
+        }
+        return ftxui::emptyElement();
+    };
+
     // main view container
     ftxui::Component input_component = file_content_input(content, cursor_index);
 
-    ftxui::Component main_view = ftxui::Renderer(input_component, [input_component]{
-        return 
+    // "Open Anyway" for a binary / unsupported encoding file (like vscode).
+    ftxui::Component open_anyway_button = ftxui::Button("Open Anyway", [] {
+        files_opened_anyway.insert(long_active_file_name);
+    }, create_plain_button_option());
+
+    // what the main view shows, chosen on every render:
+    // the editor, the binary file warning, or the greeting when no file is open.
+    enum MainViewPage { EDITOR_PAGE, BINARY_WARNING_PAGE, GREETING_PAGE };
+    int main_view_page = EDITOR_PAGE;
+
+    ftxui::Component main_view_pages = ftxui::Container::Tab({
+        input_component,
+        open_anyway_button,
+        ftxui::Renderer([] { return ftxui::emptyElement(); }), // greeting: nothing to focus
+    }, &main_view_page);
+
+    ftxui::Component main_view = ftxui::Renderer(main_view_pages, [&]{
+        main_view_page = long_active_file_name.empty() ? GREETING_PAGE
+                       : is_file_hidden_from_editor(long_active_file_name) ? BINARY_WARNING_PAGE
+                       : EDITOR_PAGE;
+
+        ftxui::Element page;
+        if (main_view_page == EDITOR_PAGE) {
+            page = ftxui::frame(
+                ftxui::vscroll_indicator(
+                    ftxui::hbox({
+                        file_content_count_component(content, show_line_numbers, cursor_index, underline_active_row_on_numbers)->Render(),
+                        SEPARATOR_TRANSPARENT,
+                        input_component->Render() | syntax_highlight(content, long_active_file_name)
+                    })
+                )
+            );
+        } else if (main_view_page == BINARY_WARNING_PAGE) {
+            page = ftxui::vcenter(
+                ftxui::vbox({
+                    ftxui::hcenter(
+                        ftxui::bold(
+                            ftxui::color(ftxui::Color::Yellow, ftxui::text("Warning"))
+                        )
+                    ),
+                    SEPARATOR_TRANSPARENT,
+                    ftxui::paragraphAlignCenter("The file is not displayed in the text editor because it is either binary or uses an unsupported text encoding."),
+                    ftxui::dim(
+                        ftxui::paragraphAlignCenter("Opening it anyway could break the Itahi Text Editor.")
+                    ),
+                    SEPARATOR_TRANSPARENT,
+                    ftxui::hcenter(
+                        open_anyway_button->Render()
+                    ),
+                })
+            );
+        } else {
+            page = ftxui::vcenter(
+                ftxui::vbox({
+                    ftxui::hcenter(
+                        ftxui::bold(ftxui::text("Welcome to Itahi Text Editor" + ITAHI_VERSION))
+                    ),
+                    SEPARATOR_TRANSPARENT,
+                    ftxui::dim(
+                        ftxui::paragraphAlignCenter("Select a file in the Explorer panel on the left to start editing.")
+                    ),
+                })
+            );
+        }
+
+        return
             ftxui::flex(
                 ftxui::vbox({
                     ftxui::flex(
                         ftxui::border(
-                            ftxui::vbox(
-                                ftxui::frame(
-                                    ftxui::vscroll_indicator(
-                                        ftxui::hbox({
-                                            file_content_count_component(content, show_line_numbers, cursor_index, underline_active_row_on_numbers)->Render(),
-                                            SEPARATOR_TRANSPARENT,
-                                            input_component->Render() | syntax_highlight(content, long_active_file_name)
-                                        })
-                                    )
-                                )
-                            )
+                            ftxui::vbox({
+                                ftxui::flex(
+                                    page
+                                ),
+                                command_line_element(),
+                            })
                         )
                     )
                 })
@@ -209,6 +304,10 @@ int main(int argc, char* argv[]) {
         active_file_not_saved = p.filename().string() + "*";
         active_file_saved = p.filename().string();
         long_active_file_name = p.string();
+
+        // show the file name in the top bar right away, not only after the
+        // first key press.
+        active_file = active_file_saved;
     }
 
     current_directory_content = iterate_current_path_shallow(target_dir);
@@ -225,9 +324,28 @@ int main(int argc, char* argv[]) {
     opened_directory_entry(screen, left_panel_button_file_container, left_panel_button_file_arr, left_panel_directory_styling, left_panel_file_styling, file_list, opened_folders, content, active_file, long_active_file_name, left_panel_button_file_container, left_panel_width, 0);
     opened_directory_file_entry(left_panel_button_file_container, left_panel_button_file_arr, left_panel_file_styling, file_list, content, active_file, long_active_file_name, left_panel_width, 0, content_already_read);
 
-    auto main_content_container = ftxui::Container::Vertical({
+    // component that had the focus before command mode, given it back when
+    // the command line closes.
+    ftxui::Component focus_before_command_mode = tab_content;
+
+    ftxui::Component main_content_container; // used by the command line below
+
+    command_line_component = ftxui::Maybe(
+        command_line_input([&] {
+            set_normal_mode();
+            command_line.clear();
+            command_error.clear();
+            // the hidden command line must not stay the active child.
+            main_content_container->SetActiveChild(tab_content.get());
+            focus_before_command_mode->TakeFocus();
+        }),
+        &is_command_mode
+    );
+
+    main_content_container = ftxui::Container::Vertical({
         file_back_button_container,
         tab_content,
+        command_line_component,
     });
 
     // left panel or file explorer system.
@@ -314,7 +432,7 @@ int main(int argc, char* argv[]) {
         ) | ftxui::reflect(left_panel_box) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, left_panel_width);
     });
 
-    auto main_content = ftxui::Renderer(main_content_container, [&] {
+    auto main_view_or_menu = [&] {
 
         if (status == 1) {
             // the "<-" button isn't drawn in this view: once it closed the menu
@@ -344,7 +462,8 @@ int main(int argc, char* argv[]) {
                     ftxui::flex(
                         tab_content->Render()
                     ),
-                    
+
+                    command_line_element(),
 
                     // ftxui::separator(),
 
@@ -358,17 +477,16 @@ int main(int argc, char* argv[]) {
                     //         ftxui::text("4 // Line Numbers: " + std::string(show_line_numbers ? "VISIBLE" : "HIDDEN")),
                     //     })
                     // ),
-
-                    ftxui::separator(),
-                    ftxui::dim(
-                        ftxui::text("Status: " + current_events)
-                    )
                 })
             );
         }
         return ftxui::border(
             ftxui::text("Error.")
         );
+    };
+
+    auto main_content = ftxui::Renderer(main_content_container, [&] {
+        return main_view_or_menu();
     });
 
     auto scrollable_left_panel = ftxui::CatchEvent(left_panel, [&](ftxui::Event event) {
@@ -447,16 +565,24 @@ int main(int argc, char* argv[]) {
             // `body_split` so the inner `scrollable_left_panel` can handle it.
             const bool over_explorer = left_panel_box.Contain(mouse.x, mouse.y);
 
-            if (!over_explorer && mouse.button == ftxui::Mouse::WheelUp) {
-                for (int i = 0; i < get_mouse_sensitivity(); i++) {
-                    main_content->OnEvent(ftxui::Event::ArrowUp);
-                }
-                return true;
-            }
+            const bool wheel = mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown;
 
-            if (!over_explorer && mouse.button == ftxui::Mouse::WheelDown) {
+            if (!over_explorer && wheel) {
+                const ftxui::Event arrow = mouse.button == ftxui::Mouse::WheelUp ? ftxui::Event::ArrowUp : ftxui::Event::ArrowDown;
+
+                // the editor gets the arrows directly: FTXUI containers ignore
+                // keys while they are not focused, so going through
+                // main_content did nothing while the explorer, the top bar or
+                // the command line had the focus.
+                ftxui::Component target = status == 1 ? input_component : main_content;
+
+                // nothing to scroll while the editor is hidden (warning / greeting).
+                if (status == 1 && main_view_page != EDITOR_PAGE) {
+                    return true;
+                }
+
                 for (int i = 0; i < get_mouse_sensitivity(); i++) {
-                    main_content->OnEvent(ftxui::Event::ArrowDown);
+                    target->OnEvent(arrow);
                 }
                 return true;
             }
@@ -491,6 +617,26 @@ int main(int argc, char* argv[]) {
     auto panel_navigation = ftxui::CatchEvent(main_container, [&](ftxui::Event event) {
         if (!is_normal_mode) {
             return false;
+        }
+
+        // '>' opens the command line from anywhere (editor, explorer, menus).
+        if (event == ftxui::Event::Character('>')) {
+            if (top_bar_component->Focused()) {
+                focus_before_command_mode = top_bar_component;
+            } else if (has_explorer && left_panel_button_file_container->Focused()) {
+                focus_before_command_mode = left_panel_button_file_container;
+            } else if (file_back_button_container->Focused()) {
+                focus_before_command_mode = file_back_button_container;
+            } else {
+                focus_before_command_mode = tab_content;
+            }
+
+            command_line = ">";
+            command_cursor_index = 1;
+            command_error.clear();
+            set_command_mode();
+            command_line_component->TakeFocus();
+            return true;
         }
 
         // Ctrl+H and Ctrl+J only arrive as their own events thanks to
@@ -536,7 +682,18 @@ int main(int argc, char* argv[]) {
         return true;
     });
 
+    // FTXUI draws the first frame from wherever the shell left the cursor, so
+    // the terminal scrolls while drawing it, and Konsole then only paints the
+    // borders, not the text. Every later frame starts from the top-left, so
+    // ask for one right away instead of waiting for the first mouse move.
+    bool first_frame_drawn = false;
+
     auto document = ftxui::Renderer(panel_navigation, [&] {
+        if (!first_frame_drawn) {
+            first_frame_drawn = true;
+            screen->PostEvent(ftxui::Event::Custom);
+        }
+
         return ftxui::vbox({
             ftxui::color(ftxui::Color::GrayDark,
                 ftxui::color(ftxui::Color::White,

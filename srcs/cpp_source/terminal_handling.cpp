@@ -42,6 +42,17 @@ ftxui::Component key_listener_function(ftxui::ScreenInteractive &screen, ftxui::
             return true;
         }
 
+        // the result of the last command, and an error shown while the
+        // command line is closed, stay until the next key press. (Mouse moves
+        // and the redraws posted by the app don't count. The command line
+        // clears its own error when it closes.)
+        if (!event.is_mouse() && event != ftxui::Event::Custom) {
+            command_output.clear();
+            if (!is_command_mode) {
+                command_error.clear();
+            }
+        }
+
         // if (event == ftxui::Event::Special("\x1B")) {
         //     current_events = "you are pressing ESC";
         //     return true;

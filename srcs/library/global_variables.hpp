@@ -39,6 +39,14 @@ extern std::map<std::string, ftxui::Box> left_panel_row_boxes;
 // bottom event response. Will be change later for command input.
 extern std::string current_events;
 
+// command mode: the text of the command line (always starts with the '>'
+// prompt), its cursor, the result of the last command shown in its place, and
+// the error of a rejected command, shown above the command line.
+extern std::string command_line;
+extern int command_cursor_index;
+extern std::string command_output;
+extern std::string command_error;
+
 extern std::string mouse_sensitivity;
 extern std::string tab_size;
 
@@ -71,6 +79,9 @@ extern std::unordered_map<std::string, bool> has_unsaved_file_inside_directory;
 
 extern std::unordered_map<std::string, std::string> content_read_first;
 extern std::unordered_map<std::string, std::string> content_user_updated;
+
+// binary / unsupported encoding files the user chose to "Open Anyway".
+extern std::unordered_set<std::string> files_opened_anyway;
 
 // global bool modes
 extern bool is_normal_mode;

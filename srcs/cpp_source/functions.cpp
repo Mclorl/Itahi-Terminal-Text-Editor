@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cctype>
 #include <iostream>
+#include <map>
 
 #include <ftxui/screen/string.hpp>
 
@@ -11,6 +13,8 @@
 #include "../library/app_data.hpp"
 
 #include "../library/file_entry.hpp"
+
+#include "../library/mode.hpp"
 
 // functions
 
@@ -36,7 +40,8 @@ ftxui::Component file_btn_new_file_func() {
 
 ftxui::Component file_btn_save_file_func() { 
     return ftxui::Button("Save File", [] {
-        current_events = write_file_entry(long_active_file_name, content);
+        const CommandResult result = save_active_file();
+        (result.ok ? command_output : command_error) = result.message;
     }, create_plain_button_option());
 }
 // --- Edit Menu Choices ---
@@ -86,13 +91,17 @@ ftxui::Component tab_size_row_func() {
 ftxui::Component btn_about_func() {
     return ftxui::Button("About Itahi Editor", [] {
         current_events = "Directing To Itahi Editor Repository.";
-        open_url("https://github.com/Mclorl/Itahi-Terminal-Text-Editor");
+        if (!open_url("https://github.com/Mclorl/Itahi-Terminal-Text-Editor")) {
+            command_error = "Could not open the Itahi Editor repository in a browser";
+        }
     }, create_plain_button_option());
 }
 ftxui::Component btn_ftxui_about_func() {
     return ftxui::Button("About FTXUI", [] {
         current_events = "Directing To FTXUI Repository.";
-        open_url("https://github.com/ArthurSonzogni/FTXUI");
+        if (!open_url("https://github.com/ArthurSonzogni/FTXUI")) {
+            command_error = "Could not open the FTXUI repository in a browser";
+        }
     }, create_plain_button_option());
 }
 
@@ -134,10 +143,6 @@ namespace {
             file_unsaved_status[long_active_file_name] = false;
         }
     }
-
-    // central place to switch modes, so the three flags can never disagree.
-    void set_normal_mode() { is_normal_mode = true;  is_edit_mode = false; is_command_mode = false; }
-    void set_insert_mode() { is_normal_mode = false; is_edit_mode = true;  is_command_mode = false; }
 
     // byte offset where the line holding byte `index` starts.
     std::size_t line_start_of(const std::string &content, int index) {
@@ -275,6 +280,150 @@ ftxui::Component file_content_input(std::string &content, int &cursor_index) {
 
         return false;
     });
+}
+
+ftxui::Component command_line_input(std::function<void()> on_leave) {
+    ftxui::InputOption option;
+    option.multiline = false;
+    option.cursor_position = &command_cursor_index;
+    option.transform = [](ftxui::InputState state) {
+        return state.element;
+    };
+
+    ftxui::Component input = ftxui::Input(&command_line, "", option);
+
+    // raw pointer for the same reason as in `file_content_input`.
+    ftxui::ComponentBase* input_ptr = input.get();
+
+    return ftxui::CatchEvent(input, [input_ptr, on_leave](ftxui::Event event) {
+        if (event.is_mouse()) {
+            return false;
+        }
+
+        if (event == ftxui::Event::Escape) {
+            on_leave();
+            return true;
+        }
+
+        if (event == ftxui::Event::Return) {
+            const CommandResult result = run_command(command_line.substr(1)); // without the '>' prompt
+
+            // an invalid or refused command keeps the command line open, with
+            // the error above it, so it can be fixed.
+            if (!result.ok) {
+                command_error = result.message;
+                return true;
+            }
+            on_leave();
+            command_output = result.message;
+            return true;
+        }
+
+        // same Backspace mapping as edit mode (see file_content_input).
+        const ftxui::Event key = event == ftxui::Event::CtrlH ? ftxui::Event::Backspace : event;
+
+        // only editing and left/right keys reach the Input. Everything else
+        // (Up/Down, Tab, ...) is swallowed, otherwise the containers would move
+        // the focus out of the command line.
+        if (key.is_character() || key == ftxui::Event::Backspace || key == ftxui::Event::Delete ||
+            key == ftxui::Event::ArrowLeft || key == ftxui::Event::ArrowRight ||
+            key == ftxui::Event::Home || key == ftxui::Event::End) {
+            input_ptr->OnEvent(key);
+        }
+
+        // the '>' prompt was deleted: close the command line.
+        if (command_line.empty() || command_line[0] != '>') {
+            on_leave();
+            return true;
+        }
+
+        // the cursor never goes before the prompt, so only a Backspace right
+        // after it can delete it.
+        command_cursor_index = std::max(1, command_cursor_index);
+        return true;
+    });
+}
+
+namespace {
+
+    struct EditorCommand {
+        bool save;
+        bool quit;
+        bool accepts_force; // whether a '!' may follow the name
+    };
+
+    // every command the command line understands. A name only matches as a
+    // whole: "wq" is a command of its own, "qw" is not one.
+    const std::map<std::string, EditorCommand> editor_commands = {
+        {"w",  {true,  false, false}}, // save the open file
+        {"q",  {false, true,  true }}, // quit, "q!" even with unsaved files
+        {"wq", {true,  true,  true }}, // save, then quit
+    };
+
+}  // namespace
+
+CommandResult save_active_file() {
+    if (long_active_file_name.empty()) {
+        return {false, "No file is open to save"};
+    }
+    const std::string message = write_file_entry(long_active_file_name, content);
+
+    // after a successful write the saved copy matches the buffer.
+    return {content_read_first[long_active_file_name] == content, message};
+}
+
+CommandResult run_command(std::string command) {
+    const std::size_t first = command.find_first_not_of(' ');
+    if (first == std::string::npos) {
+        return {true, ""};
+    }
+    command = command.substr(first, command.find_last_not_of(' ') - first + 1);
+
+    // a command is a name made of letters, optionally followed by '!'.
+    std::size_t name_end = 0;
+    while (name_end < command.size() && std::isalpha(static_cast<unsigned char>(command[name_end]))) {
+        name_end++;
+    }
+    const std::string name = command.substr(0, name_end);
+    const std::string rest = command.substr(name_end);
+
+    const auto found = editor_commands.find(name);
+    if (name.empty() || found == editor_commands.end()) {
+        return {false, "Not an editor command: " + command};
+    }
+    const bool force = rest == "!";
+    if (!rest.empty() && !force) {
+        return {false, "Trailing characters: " + rest};
+    }
+    const EditorCommand& action = found->second;
+    if (force && !action.accepts_force) {
+        return {false, "No ! allowed: " + command};
+    }
+
+    std::string message;
+    if (action.save) {
+        const CommandResult saved = save_active_file();
+
+        // the write failed and the changes are still only in memory: stop
+        // here so the quit of "wq" can't lose them.
+        if (!saved.ok) {
+            return saved;
+        }
+        message = saved.message;
+    }
+
+    if (action.quit) {
+        if (!force) {
+            for (const auto& [file, unsaved] : file_unsaved_status) {
+                if (unsaved) {
+                    return {false, "Unsaved changes in " + (file.empty() ? std::string("the open buffer") : file) + " (add ! to quit anyway)"};
+                }
+            }
+        }
+        screen->ExitLoopClosure()();
+    }
+
+    return {true, message};
 }
 
 bool check_content_directory_for_unsaved_file(std::string path) {

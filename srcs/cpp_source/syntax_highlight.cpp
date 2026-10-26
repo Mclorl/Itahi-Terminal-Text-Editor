@@ -451,7 +451,7 @@ namespace {
         lang->query = ts_query_new(lang->language, source.data(), static_cast<uint32_t>(source.size()), &error_offset, &error_type);
 
         if (!lang->query) {
-            current_events = std::string("Syntax highlighting: the ") + info.name + " query failed to load (byte " + std::to_string(error_offset) + ").";
+            command_error = std::string("Syntax highlighting: the ") + info.name + " query failed to load (byte " + std::to_string(error_offset) + ").";
         } else {
             const uint32_t capture_count = ts_query_capture_count(lang->query);
             for (uint32_t id = 0; id < capture_count; ++id) {
