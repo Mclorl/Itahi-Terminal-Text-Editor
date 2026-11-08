@@ -1,13 +1,14 @@
+#include "ui/menu_bar.hpp"
+
 #include <ftxui/component/component.hpp>
 #include <ftxui/dom/elements.hpp>
 
-#include "ui/menu_bar.hpp"
-
-#include "ui/widgets.hpp"
 #include "editor/state.hpp"
+#include "editor/workspace.hpp"
 #include "ui/ui_state.hpp"
+#include "ui/widgets.hpp"
 
-ftxui::Component make_top_bar(const std::string &active_file_name) {
+ftxui::Component make_top_bar() {
     ftxui::Component menu_bar_container = ftxui::Container::Horizontal({
         create_text_button("File", 0, tab_selected, status),
         create_text_button("Edit", 1, tab_selected, status),
@@ -16,9 +17,10 @@ ftxui::Component make_top_bar(const std::string &active_file_name) {
         create_text_button("Help", 4, tab_selected, status),
     });
 
-    return ftxui::Renderer(menu_bar_container, [menu_bar_container, &active_file_name] {
-        ftxui::Element file_name = ftxui::text(active_file_name.empty() ? "--" : active_file_name);
-        if (!active_file_name.empty() && active_file_name == active_file_not_saved) {
+    return ftxui::Renderer(menu_bar_container, [menu_bar_container] {
+        const Document* document = workspace.active();
+        ftxui::Element file_name = ftxui::text(document ? document->name() + (document->unsaved() ? "*" : "") : "--");
+        if (document && document->unsaved()) {
             file_name = ftxui::color(ftxui::Color::Yellow, file_name);
         }
 
@@ -29,7 +31,8 @@ ftxui::Component make_top_bar(const std::string &active_file_name) {
             ftxui::flex(menu_bar_container->Render()),
             ftxui::flex(ftxui::center(ftxui::bold(file_name))),
             ftxui::flex(ftxui::hbox({ftxui::separatorEmpty()})),
-            ftxui::bold(ftxui::text(mode_name)),
+            // in the editor the status bar shows the mode; in the menus, here.
+            status == 1 ? ftxui::text("") : ftxui::bold(ftxui::text(mode_name)),
         });
     });
 }

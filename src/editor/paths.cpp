@@ -6,16 +6,41 @@
 
 #include "core/file_io.hpp"
 #include "editor/state.hpp"
+#include "editor/workspace.hpp"
 
 namespace fs = std::filesystem;
 
+fs::path current_new_file_folder() {
+    const std::string folder = active_folder ? active_folder() : std::string();
+    return folder.empty() ? fs::path(workspace.root) : fs::path(folder);
+}
+
+std::string active_folder_for_command() {
+    std::string folder = current_new_file_folder().lexically_normal().string();
+    if (folder == "." || folder == "./" || folder.empty()) {
+        return "";
+    }
+    if (folder.rfind("./", 0) == 0) {
+        folder.erase(0, 2);
+    }
+    if (folder.back() != '/') {
+        folder += '/';
+    }
+    return folder;
+}
+
 fs::path resolve_user_path(const std::string& typed) {
     if (!typed.empty() && typed[0] == '/') {
-        return fs::path(workspace_root) / typed.substr(1);
+        return fs::path(workspace.root) / typed.substr(1);
     }
     if (typed == "~" || typed.rfind("~/", 0) == 0) {
         const char* home = std::getenv("HOME");
         return fs::path(home ? home : ".") / (typed.size() > 2 ? typed.substr(2) : std::string());
+    }
+    // a plain name ("notes.txt"): in the folder Itahi opened. To put it in
+    // the active folder instead, take the ghost hint with Tab (">e src/").
+    if (typed.find('/') == std::string::npos && typed != "." && typed != "..") {
+        return fs::path(workspace.root) / typed;
     }
     return fs::path(typed);
 }
@@ -40,7 +65,7 @@ PathCompletion complete_path(const std::string& typed) {
     const std::string folder_part = slash == std::string::npos ? "" : typed.substr(0, slash + 1);
     const std::string prefix = slash == std::string::npos ? typed : typed.substr(slash + 1);
 
-    const fs::path folder = folder_part.empty() ? fs::path(".") : resolve_user_path(folder_part);
+    const fs::path folder = folder_part.empty() ? fs::path(workspace.root) : resolve_user_path(folder_part);
     std::string error;
     std::vector<std::string> names;
     for (const fs::path& entry : list_directory(folder, error)) {

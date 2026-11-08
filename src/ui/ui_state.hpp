@@ -6,6 +6,8 @@
 #include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/screen/box.hpp>
 
+#include "platform/git.hpp"
+
 // state that only the UI needs.
 
 extern ftxui::ScreenInteractive* screen;
@@ -26,3 +28,7 @@ extern std::map<std::string, ftxui::Box> left_panel_row_boxes;
 // New File creates its file in this folder, or in the folder of this file.
 extern std::string explorer_selected_path;
 extern bool explorer_selected_is_folder;
+
+// what Git said about the opened folder last time it was asked (the
+// explorer's marks and the status bar's branch). Updated in the background.
+extern GitStatus git_status;

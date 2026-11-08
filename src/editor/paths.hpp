@@ -5,9 +5,11 @@
 #include <vector>
 
 // paths typed in the command line (>e name, >w name).
-//   /dir/file   inside the folder Itahi opened (`workspace_root`), like a
+//   /dir/file   inside the folder Itahi opened (`workspace.root`), like a
 //               project-relative path in vscode
 //   ~/dir/file  inside the home folder
+//   name        a plain name (no '/'): inside the folder Itahi opened. The
+//               active folder is offered as a ghost hint after ">e" (Tab)
 //   dir/file    relative, the way the explorer shows paths (eg. ./src/a.cpp)
 std::filesystem::path resolve_user_path(const std::string& typed);
 
@@ -20,6 +22,13 @@ struct PathCompletion {
     std::string text;                  // the typed path, completed as far as it is certain
     std::vector<std::string> options;  // every possible name when there is more than one
 };
+
+// the folder a plain name typed in a command goes to.
+std::filesystem::path current_new_file_folder();
+
+// that folder the way it is typed after ">e ": "src/" or "docs/drafts/", with
+// no leading "./"; "" when it is the folder Itahi was started in.
+std::string active_folder_for_command();
 
 // completes the last part of `typed` with the folders and files that start
 // with it. Folders end with '/'. Hidden entries only when the typed part

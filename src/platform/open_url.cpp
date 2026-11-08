@@ -1,12 +1,12 @@
 #include "platform/open_url.hpp"
 
-#include <csignal>
 #include <fcntl.h>
 #include <spawn.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
 #include <string>
+#include <thread>
 
 extern char** environ;
 
@@ -31,7 +31,12 @@ bool open_url(const std::string& url) {
         return false;
     }
 
-    // reap it in the background so it doesn't stay a zombie.
-    signal(SIGCHLD, SIG_IGN);
+    // reap it when it ends so it doesn't stay a zombie. (Not by ignoring
+    // SIGCHLD: that would also hide the exit codes of git and the clipboard
+    // programs, see platform/process.hpp.)
+    std::thread([pid] {
+        int status = 0;
+        waitpid(pid, &status, 0);
+    }).detach();
     return true;
 }

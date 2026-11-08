@@ -8,7 +8,9 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/box.hpp>
 
+#include <functional>
 #include <string>
+#include <vector>
 
 // records the box assigned to an element during layout, without clipping it to
 // the visible viewport (unlike `ftxui::reflect`). Used to keep the explorer's
@@ -32,12 +34,15 @@ struct ScrollState {
 };
 ftxui::Element scroll_frame(ftxui::Element child, ScrollState& state);
 
-// underlines the whole row `row` of the element (counted from its top). The
-// underline is always white, whatever the color of the text on that row.
-ftxui::Decorator underline_row(int row);
+// draws the white scroll bar in column `x` from row `y_min` to `y_max`, for a
+// view showing rows [top, top + view rows) of `total_rows`. Every cell of the
+// column is cleared first; no bar when everything fits.
+void paint_scroll_bar(ftxui::Screen& screen, int x, int y_min, int y_max, int top, int total_rows);
 
-// underlines every cell of the element, in white like underline_row().
-ftxui::Element underlined_white(ftxui::Element child);
+// marks one cell of the cursor's row, the way `mark` (ROW_MARK_*, see
+// editor/settings.hpp) says: a white underline, a `shade` background, or an
+// underline in the text's color. `x_min` is the first column of the row.
+void mark_active_row_cell(ftxui::Screen& screen, int x, int y, int x_min, int mark, ftxui::Color shade);
 
 
 // width and digits of the numeric settings fields.
@@ -51,5 +56,12 @@ ftxui::ButtonOption create_plain_button_option_symbol();
 ftxui::ButtonOption create_plain_button_option();
 
 ftxui::CheckboxOption create_plain_checkbox_option();
+
+// a dropdown in Itahi's style instead of FTXUI's boxed one: closed it reads
+// "< Choice v >" like the buttons; open, the choices are listed below it as
+// "(*) Choice" / "( ) Other", like the checkboxes. Bold when focused.
+// `on_change` runs when another choice is picked.
+ftxui::Component create_plain_dropdown(const std::vector<std::string>* entries, int* selected,
+                                       std::function<void()> on_change = {});
 
 ftxui::Component create_text_button(const std::string& label, int tab_index, int &selected_tab, int &view_status);

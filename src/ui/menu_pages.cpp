@@ -1,9 +1,9 @@
 #include "ui/menu_pages.hpp"
 
 #include <algorithm>
-#include <filesystem>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
@@ -14,12 +14,31 @@
 #include "syntax/theme.hpp"
 
 #include "editor/commands.hpp"
+#include "editor/paths.hpp"
+#include "editor/settings.hpp"
 #include "editor/state.hpp"
 #include "editor/undo_history.hpp"
+#include "editor/workspace.hpp"
 #include "platform/open_url.hpp"
 #include "ui/command_line.hpp"
+#include "ui/editor_view.hpp"
 #include "ui/ui_state.hpp"
 #include "ui/widgets.hpp"
+
+namespace {
+
+    void show(const CommandResult& result) {
+        (result.ok ? command_output : command_error) = result.message;
+    }
+
+    // a dropdown with its label in front: "Theme: < Itahi v >".
+    ftxui::Component labeled(const std::string& label, ftxui::Component dropdown) {
+        return ftxui::Renderer(dropdown, [label, dropdown] {
+            return ftxui::hbox({ftxui::text(label), dropdown->Render()});
+        });
+    }
+
+}  // namespace
 
 // tab functions
 // --- File Back Option ---
@@ -32,67 +51,102 @@ ftxui::Component file_back_button_func() {
 // --- File Menu Choices ---
 ftxui::Component file_btn_new_file_func() {
     return ftxui::Button("New File", [] {
-        // ">e folder/name" creates the file. The folder is the one selected in
-        // the explorer (or the folder of the selected file); type the name.
-        if (!open_command_line) {
-            return;
+        // ">e src/" with the active folder (the one selected in the explorer)
+        // written in: type the name. Ctrl+N does the same.
+        if (open_command_line) {
+            open_command_line("e " + active_folder_for_command());
         }
-        std::string folder;
-        if (!explorer_selected_path.empty()) {
-            folder = explorer_selected_is_folder ? explorer_selected_path
-                                                 : std::filesystem::path(explorer_selected_path).parent_path().string();
-        }
-        open_command_line("e " + (folder.empty() ? std::string() : folder + "/"));
     }, create_plain_button_option());
 }
 
 ftxui::Component file_btn_save_file_func() {
-    return ftxui::Button("Save File", [] {
-        const CommandResult result = save_active_file();
-        (result.ok ? command_output : command_error) = result.message;
-    }, create_plain_button_option());
+    return ftxui::Button("Save File", [] { show(save_active_file()); }, create_plain_button_option());
+}
+
+ftxui::Component file_btn_close_file_func() {
+    return ftxui::Button("Close File", [] { show(close_active_file()); }, create_plain_button_option());
 }
 // --- Edit Menu Choices ---
 ftxui::Component edit_btn_undo_func() {
-    return ftxui::Button("Undo", [] {
-        const CommandResult result = undo_edit();
-        (result.ok ? command_output : command_error) = result.message;
-    }, create_plain_button_option());
+    return ftxui::Button("Undo", [] { show(undo_edit()); }, create_plain_button_option());
 }
 ftxui::Component edit_btn_redo_func() {
-    return ftxui::Button("Redo", [] {
-        const CommandResult result = redo_edit();
-        (result.ok ? command_output : command_error) = result.message;
-    }, create_plain_button_option());
+    return ftxui::Button("Redo", [] { show(redo_edit()); }, create_plain_button_option());
+}
+ftxui::Component edit_btn_cut_func(EditorView& view) {
+    return ftxui::Button("Cut", [&view] { view.cut(); }, create_plain_button_option());
+}
+ftxui::Component edit_btn_copy_func(EditorView& view) {
+    return ftxui::Button("Copy", [&view] { view.copy(); }, create_plain_button_option());
+}
+ftxui::Component edit_btn_paste_func(EditorView& view) {
+    return ftxui::Button("Paste", [&view] { view.paste_clipboard(); }, create_plain_button_option());
+}
+ftxui::Component edit_btn_select_all_func(EditorView& view) {
+    return ftxui::Button("Select All", [&view] { view.select_all(); }, create_plain_button_option());
 }
 // --- View Menu Choices ---
 ftxui::Component toggle_linenums_func() {
-    return ftxui::Checkbox("Show Line Numbers", &show_line_numbers, create_plain_checkbox_option());
+    return ftxui::Checkbox("Show Line Numbers", &settings.show_line_numbers, create_plain_checkbox_option());
 }
 
 ftxui::Component toggle_underline_active_row_on_numbers_func() {
-    return ftxui::Checkbox("Show Underline On Active Row On Numbers", &underline_active_row_on_numbers, create_plain_checkbox_option());
+    return ftxui::Checkbox("Show Underline On Active Row On Numbers", &settings.underline_active_row_on_numbers, create_plain_checkbox_option());
 }
 
 ftxui::Component toggle_underline_active_row_func() {
-    return ftxui::Checkbox("Show Underline On Active Row", &underline_active_row, create_plain_checkbox_option());
+    return ftxui::Checkbox("Show Underline On Active Row", &settings.underline_active_row, create_plain_checkbox_option());
+}
+
+ftxui::Component active_row_style_row_func() {
+    // the order matches ROW_MARK_WHITE_LINE / ROW_MARK_SHADED / ROW_MARK_TEXT_COLOR.
+    static const std::vector<std::string> styles = {"White underline", "Shaded background", "Underline in text color"};
+    return labeled("Active Row Style: ", create_plain_dropdown(&styles, &settings.active_row_mark));
 }
 
 ftxui::Component toggle_syntax_highlighting_func() {
-    return ftxui::Checkbox("Enable Syntax Highlighting", &syntax_highlighting, create_plain_checkbox_option());
+    return ftxui::Checkbox("Enable Syntax Highlighting", &settings.syntax_highlighting, create_plain_checkbox_option());
 }
 
 ftxui::Component toggle_word_wrap_func() {
-    return ftxui::Checkbox("Enable Word Wrap", &word_wrap, create_plain_checkbox_option());
+    return ftxui::Checkbox("Enable Word Wrap", &settings.word_wrap, create_plain_checkbox_option());
+}
+
+ftxui::Component toggle_status_bar_func() {
+    return ftxui::Checkbox("Show Status Bar", &settings.show_status_bar, create_plain_checkbox_option());
+}
+
+ftxui::Component toggle_tabs_func() {
+    return ftxui::Checkbox("Show Open File Tabs", &settings.show_tabs, create_plain_checkbox_option());
+}
+
+ftxui::Component theme_row_func() {
+    static const std::vector<std::string> names = [] {
+        std::vector<std::string> list;
+        for (const Theme& theme : themes()) {
+            list.emplace_back(theme.name);
+        }
+        return list;
+    }();
+    return labeled("Theme: ", create_plain_dropdown(&names, &settings.theme, [] { apply_theme(settings.theme); }));
 }
 
 // --- Settings Menu Choices ---
 ftxui::Component mouse_sens_row_func() {
-    return make_numeric_input_row(mouse_sensitivity, "Mouse Sensitivity: ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
+    return make_numeric_input_row(settings.mouse_sensitivity, "Mouse Sensitivity: ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
 }
 ftxui::Component tab_size_row_func() {
-    return make_numeric_input_row(tab_size, "Tab Size (spaces): ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
+    return make_numeric_input_row(settings.tab_size, "Tab Size (columns): ", MAX_DIGITS_LENGTH_DEFAULT, MAX_WIDTH_INPUT_INT_DEFAULT);
 }
+ftxui::Component toggle_tab_inserts_spaces_func() {
+    return ftxui::Checkbox("Tab Key Inserts Spaces", &settings.tab_inserts_spaces, create_plain_checkbox_option());
+}
+ftxui::Component scroll_style_row_func() {
+    // the order matches SCROLL_KEEP_CURSOR_CENTERED / SCROLL_FREELY.
+    static const std::vector<std::string> styles = {"Keep cursor centered", "Scroll freely"};
+    return labeled("Scroll style: ", create_plain_dropdown(&styles, &settings.scroll_style));
+}
+
 // --- Help Menu Choices ---
 ftxui::Component btn_about_func() {
     return ftxui::Button("About Itahi Editor", [] {
@@ -195,7 +249,7 @@ ftxui::Component syntax_color_settings_func() {
     // the header is drawn around the rows (not a row itself), so Up/Down
     // never stop on it.
     return ftxui::Renderer(rows_container, [rows_container] {
-        const std::string language = syntax_language_name(long_active_file_name);
+        const std::string language = syntax_language_name(active_path());
         return ftxui::vbox({
             ftxui::text(""),
             ftxui::bold(ftxui::text("Syntax Colors")),

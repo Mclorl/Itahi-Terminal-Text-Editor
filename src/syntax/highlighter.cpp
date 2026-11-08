@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "editor/settings.hpp"
 #include "editor/state.hpp"
 #include "syntax/languages.hpp"
 #include "syntax/predicates.hpp"
@@ -201,40 +202,65 @@ static void edit_tree(TSTree* tree, const std::string& old_text, const std::stri
     ts_tree_edit(tree, &edit);
 }
 
-HighlightCache& highlights_for(const std::string& text, const std::string& path) {
-    static HighlightCache cache;
+HighlightCache::~HighlightCache() {
+    if (tree) {
+        ts_tree_delete(tree);
+    }
+}
 
-    if (cache.path == path && cache.content == text && (cache.tree || cache.language_index < 0)) {
+namespace {
+
+    // the caches of the files shown most recently, the latest first. A few
+    // are kept so switching between tabs doesn't parse the files again.
+    constexpr std::size_t max_cached_files = 8;
+    std::vector<std::unique_ptr<HighlightCache>>& caches() {
+        static std::vector<std::unique_ptr<HighlightCache>> list;
+        return list;
+    }
+
+}  // namespace
+
+void forget_highlights(const std::string& path) {
+    auto& list = caches();
+    list.erase(std::remove_if(list.begin(), list.end(), [&](const auto& c) { return c->path == path; }), list.end());
+}
+
+HighlightCache& highlights_for(const std::string& text, const std::string& path, std::uint64_t version) {
+    auto& list = caches();
+    auto found = std::find_if(list.begin(), list.end(), [&](const auto& c) { return c->path == path; });
+    if (found == list.end()) {
+        list.insert(list.begin(), std::make_unique<HighlightCache>());
+        list.front()->path = path;
+        list.front()->language_index = language_index_for(path);
+        if (list.size() > max_cached_files) {
+            list.pop_back();
+        }
+        found = list.begin();
+    } else if (found != list.begin()) {
+        std::rotate(list.begin(), found, found + 1);  // most recent first
+        found = list.begin();
+    }
+    HighlightCache& cache = **found;
+
+    const bool up_to_date = version != UINT64_MAX ? cache.version == version && cache.content.size() == text.size()
+                                                  : cache.content == text;
+    if (up_to_date && (cache.tree || cache.language_index < 0)) {
         return cache;
     }
 
-    const bool same_file = cache.path == path && cache.tree;
-    const int language_index = same_file ? cache.language_index : language_index_for(path);
-
-    TSTree* old_tree = nullptr;
-    if (same_file) {
-        edit_tree(cache.tree, cache.content, text);
-        old_tree = cache.tree;
-    } else if (cache.tree) {
-        ts_tree_delete(cache.tree);
+    TSTree* old_tree = cache.tree;
+    if (old_tree) {
+        edit_tree(old_tree, cache.content, text);
     }
     cache.tree = nullptr;
 
-    cache.path = path;
     cache.content = text;
-    cache.language_index = language_index;
+    cache.version = version;
     cache.colored_begin = cache.colored_end = 0;
     cache.byte_groups.assign(text.size(), static_cast<unsigned char>(SyntaxGroup::None));
 
-    cache.line_starts.assign(1, 0);
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        if (text[i] == '\n') {
-            cache.line_starts.push_back(i + 1);
-        }
-    }
-
-    if (language_index >= 0) {
-        LoadedLanguage* lang = loaded_language(static_cast<std::size_t>(language_index));
+    if (cache.language_index >= 0) {
+        LoadedLanguage* lang = loaded_language(static_cast<std::size_t>(cache.language_index));
         if (lang->query && ts_parser_set_language(shared_parser(), lang->language)) {
             cache.tree = ts_parser_parse_string(shared_parser(), old_tree, text.data(), static_cast<uint32_t>(text.size()));
         }
@@ -317,28 +343,6 @@ void ensure_colored(HighlightCache& cache, std::size_t begin, std::size_t end) {
     }
     constexpr std::size_t margin = 16 * 1024;
     color_range(cache, begin > margin ? begin - margin : 0, std::min(end + margin, cache.content.size()));
-}
-
-void syntax_colors(const std::string& text, const std::string& path, std::vector<ftxui::Color>& out) {
-    out.assign(text.size(), ftxui::Color::Default);
-    if (!syntax_highlighting || text.empty()) {
-        return;
-    }
-    HighlightCache& cache = highlights_for(text, path);
-    if (cache.language_index < 0) {
-        return;
-    }
-    ensure_colored(cache, 0, text.size());
-
-    const auto& settings = group_settings();
-    const auto& palette = color_palette();
-    for (std::size_t i = 0; i < text.size(); ++i) {
-        const unsigned char group = cache.byte_groups[i];
-        const int color_index = settings[group].color_index;
-        if (group != 0 && color_index != 0) {
-            out[i] = palette[static_cast<std::size_t>(color_index)].color;
-        }
-    }
 }
 
 std::string syntax_language_name(const std::string& path) {

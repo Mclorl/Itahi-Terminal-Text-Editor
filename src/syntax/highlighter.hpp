@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -35,31 +36,36 @@ enum class SyntaxGroup : unsigned char {
     Count,
 };
 
-// syntax tree + colors of the last rendered content. The tree is updated
-// incrementally on edits, and the query only runs over the part of the
-// file that is on screen, so typing in a large file stays fast.
+// syntax tree + colors of one open file. The tree is updated incrementally
+// on edits, and the query only runs over the part of the file that is on
+// screen, so typing in a large file stays fast.
 struct HighlightCache {
     std::string path;
     std::string content;
+    std::uint64_t version = UINT64_MAX;      // of the Document the content came from
     int language_index = -1;
     TSTree* tree = nullptr;
-    std::vector<std::size_t> line_starts;    // byte offset of every line
     std::vector<unsigned char> byte_groups;  // SyntaxGroup per byte, valid in [colored_begin, colored_end)
     std::size_t colored_begin = 0;
     std::size_t colored_end = 0;
+
+    HighlightCache() = default;
+    HighlightCache(const HighlightCache&) = delete;
+    HighlightCache& operator=(const HighlightCache&) = delete;
+    ~HighlightCache();
 };
 
-
-// the highlight state for `content` (the file at `path`), updated
-// incrementally from the previous call. language_index < 0: no grammar.
-HighlightCache& highlights_for(const std::string& text, const std::string& path);
+// the highlight state for `text` (the file at `path`), updated
+// incrementally from the previous call for that file. `version` (the
+// Document's) skips comparing the text when nothing changed. One cache is
+// kept per file, for the last few files shown. language_index < 0: no grammar.
+HighlightCache& highlights_for(const std::string& text, const std::string& path, std::uint64_t version = UINT64_MAX);
 
 // make sure byte_groups is valid for [begin, end) (plus a margin).
 void ensure_colored(HighlightCache& cache, std::size_t begin, std::size_t end);
 
+// forget the cache of `path` (its file was closed).
+void forget_highlights(const std::string& path);
+
 // name of the language used for `path` ("" when no grammar matches).
 std::string syntax_language_name(const std::string& path);
-
-// the color of every byte of `text` (Color::Default where there is none),
-// for views that draw the text themselves (word wrap).
-void syntax_colors(const std::string& text, const std::string& path, std::vector<ftxui::Color>& out);

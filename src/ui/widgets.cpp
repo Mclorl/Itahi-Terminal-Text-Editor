@@ -14,6 +14,7 @@
 
 #include "ui/widgets.hpp"
 
+#include "editor/settings.hpp"
 #include "editor/state.hpp"
 
 namespace {
@@ -78,31 +79,9 @@ namespace {
 
     void Render(ftxui::Screen& screen) override {
         ftxui::Node::Render(screen);
-
         const ftxui::Box& stencil = screen.stencil;
-        const int size_inner = box_.y_max - box_.y_min;
-        const int size_outer = stencil.y_max - stencil.y_min + 1;
-        const int x = stencil.x_max;
-
-        for (int y = stencil.y_min; y <= stencil.y_max; ++y) {
-            ftxui::Cell& cell = screen.CellAt(x, y);
-            cell.character = " ";
-            cell.foreground_color = ftxui::Color::White;
-            cell.background_color = ftxui::Color::Default;
-            cell.bold = cell.dim = cell.italic = cell.underlined = cell.inverted = false;
-        }
-        if (size_inner <= 0 || size_outer >= size_inner) {
-            return;  // everything fits: no bar
-        }
-
-        const int size = std::max(2 * size_outer * size_outer / size_inner, 1);
-        const int start_y = 2 * stencil.y_min + 2 * (stencil.y_min - box_.y_min) * size_outer / size_inner;
-
-        for (int y = stencil.y_min; y <= stencil.y_max; ++y) {
-            const bool up = start_y <= 2 * y && 2 * y <= start_y + size;
-            const bool down = start_y <= 2 * y + 1 && 2 * y + 1 <= start_y + size;
-            screen.CellAt(x, y).character = up ? (down ? "┃" : "╹") : (down ? "╻" : " ");
-        }
+        paint_scroll_bar(screen, stencil.x_max, stencil.y_min, stencil.y_max, stencil.y_min - box_.y_min,
+                         box_.y_max - box_.y_min + 1);
     }
     };
 
@@ -157,8 +136,41 @@ ftxui::Element scroll_frame(ftxui::Element child, ScrollState& state) {
     return std::make_shared<ScrollFrame>(std::move(child), state);
 }
 
-namespace {
+void paint_scroll_bar(ftxui::Screen& screen, int x, int y_min, int y_max, int top, int total_rows) {
+    for (int y = y_min; y <= y_max; ++y) {
+        ftxui::Cell& cell = screen.CellAt(x, y);
+        cell.character = " ";
+        cell.foreground_color = ftxui::Color::White;
+        cell.background_color = ftxui::Color::Default;
+        cell.bold = cell.dim = cell.italic = cell.underlined = cell.inverted = false;
+    }
+    const int size_outer = y_max - y_min + 1;
+    if (total_rows <= 0 || size_outer >= total_rows) {
+        return;  // everything fits: no bar
+    }
 
+    // in half rows: the bar can start and end in the middle of a cell.
+    const int size = std::max(2 * size_outer * size_outer / total_rows, 1);
+    const int start_y = 2 * y_min + 2 * top * size_outer / total_rows;
+    for (int y = y_min; y <= y_max; ++y) {
+        const bool up = start_y <= 2 * y && 2 * y <= start_y + size;
+        const bool down = start_y <= 2 * y + 1 && 2 * y + 1 <= start_y + size;
+        screen.CellAt(x, y).character = up ? (down ? "┃" : "╹") : (down ? "╻" : " ");
+    }
+}
+
+void mark_active_row_cell(ftxui::Screen& screen, int x, int y, int x_min, int mark, ftxui::Color shade) {
+    ftxui::Cell& cell = screen.CellAt(x, y);
+    if (mark == ROW_MARK_SHADED) {
+        if (cell.background_color == ftxui::Color::Default) {
+            cell.background_color = shade;
+        }
+        return;
+    }
+    cell.underlined = true;
+    if (mark == ROW_MARK_TEXT_COLOR) {
+        return;
+    }
     // the terminal draws an underline in the text's color, so on a
     // highlighted line it changes color with every word. Terminals also have
     // a separate underline color (SGR 58), which FTXUI doesn't know about:
@@ -166,84 +178,12 @@ namespace {
     // all attributes at once, so it stays set. Full-width characters are
     // skipped (FTXUI measures them to know which cell to skip next); they keep
     // the color set by the cell before them.
-    void underline_white(ftxui::Screen& screen, int x, int y, int x_min) {
-        ftxui::Cell& cell = screen.CellAt(x, y);
-        cell.underlined = true;
-        const bool second_half = cell.character.empty() && x > x_min &&
-                                 ftxui::string_width(screen.CellAt(x - 1, y).character) == 2;
-        if (second_half || ftxui::string_width(cell.character) == 2) {
-            return;
-        }
-        cell.character = "\x1B[58;5;15m" + (cell.character.empty() ? std::string(" ") : cell.character);
+    const bool second_half = cell.character.empty() && x > x_min &&
+                             ftxui::string_width(screen.CellAt(x - 1, y).character) == 2;
+    if (second_half || ftxui::string_width(cell.character) == 2) {
+        return;
     }
-
-    // underlines every cell of the child (one row of the wrapped view).
-    class UnderlineAll : public ftxui::Node {
-    public:
-    explicit UnderlineAll(ftxui::Element child) : ftxui::Node({std::move(child)}) {}
-
-    void ComputeRequirement() override {
-        ftxui::Node::ComputeRequirement();
-        requirement_ = children_[0]->requirement();
-    }
-
-    void SetBox(ftxui::Box box) override {
-        ftxui::Node::SetBox(box);
-        children_[0]->SetBox(box);
-    }
-
-    void Render(ftxui::Screen& screen) override {
-        children_[0]->Render(screen);
-        const int x_min = std::max(box_.x_min, screen.stencil.x_min);
-        for (int y = std::max(box_.y_min, screen.stencil.y_min); y <= std::min(box_.y_max, screen.stencil.y_max); ++y) {
-            for (int x = x_min; x <= std::min(box_.x_max, screen.stencil.x_max); ++x) {
-                underline_white(screen, x, y, x_min);
-            }
-        }
-    }
-    };
-
-    // underlines one row of the child: the cursor's line in the editor.
-    class UnderlineRow : public ftxui::Node {
-    public:
-    UnderlineRow(ftxui::Element child, int row) : ftxui::Node({std::move(child)}), row_(row) {}
-
-    void ComputeRequirement() override {
-        ftxui::Node::ComputeRequirement();
-        requirement_ = children_[0]->requirement();
-    }
-
-    void SetBox(ftxui::Box box) override {
-        ftxui::Node::SetBox(box);
-        children_[0]->SetBox(box);
-    }
-
-    void Render(ftxui::Screen& screen) override {
-        children_[0]->Render(screen);
-        const int y = box_.y_min + row_;
-        if (row_ < 0 || y < screen.stencil.y_min || y > screen.stencil.y_max || y > box_.y_max) {
-            return;
-        }
-        const int x_min = std::max(box_.x_min, screen.stencil.x_min);
-        for (int x = x_min; x <= std::min(box_.x_max, screen.stencil.x_max); ++x) {
-            underline_white(screen, x, y, x_min);
-        }
-    }
-
-    private:
-    int row_;
-    };
-
-} // namespace
-
-ftxui::Element underlined_white(ftxui::Element child) {
-    return std::make_shared<UnderlineAll>(std::move(child));
-}
-
-ftxui::Decorator underline_row(int row) {
-    return [row](ftxui::Element child) -> ftxui::Element {
-        return std::make_shared<UnderlineRow>(std::move(child), row);
-    };
+    cell.character = "\x1B[58;5;15m" + (cell.character.empty() ? std::string(" ") : cell.character);
 }
 
 ftxui::Element white_vscroll_indicator(ftxui::Element child) {
@@ -349,6 +289,129 @@ ftxui::CheckboxOption create_plain_checkbox_option() {
     };
 
     return option;
+}
+
+namespace {
+
+    // a dropdown in Itahi's style (see create_plain_dropdown). Its own
+    // component, not FTXUI's Dropdown: FTXUI's list moves with the keyboard
+    // from a position that a mouse click doesn't update, so after choosing
+    // with the mouse, Up / Down started from the old choice.
+    class PlainDropdown : public ftxui::ComponentBase {
+    public:
+        PlainDropdown(const std::vector<std::string>* entries, int* selected, std::function<void()> on_change)
+            : entries_(entries), selected_(selected), on_change_(std::move(on_change)) {}
+
+        ftxui::Element OnRender() override {
+            const int count = static_cast<int>(entries_->size());
+            *selected_ = std::clamp(*selected_, 0, std::max(0, count - 1));
+            const bool focused = Focused();
+            const std::string& current = count > 0 ? (*entries_)[static_cast<std::size_t>(*selected_)] : std::string();
+
+            // the title, like a button: "< Keep cursor centered v >".
+            ftxui::Element title = ftxui::text("< " + current + (open_ ? " ^ >" : " v >"));
+            if (focused && !open_) {
+                title = ftxui::bold(title);
+            }
+            ftxui::Elements rows{title | ftxui::reflect(title_box_)};
+            boxes_.resize(static_cast<std::size_t>(count));
+
+            // open: every choice under it, like a checkbox: "(*) Keep cursor centered".
+            if (open_) {
+                for (int i = 0; i < count; ++i) {
+                    ftxui::Element choice = ftxui::text(std::string(i == *selected_ ? "(*) " : "( ) ") + (*entries_)[static_cast<std::size_t>(i)]);
+                    if (focused && i == highlighted_) {
+                        choice = ftxui::bold(choice);
+                    }
+                    rows.push_back(ftxui::hbox({ftxui::text("  "), choice}) | ftxui::reflect(boxes_[static_cast<std::size_t>(i)]));
+                }
+            }
+            return ftxui::vbox(std::move(rows));
+        }
+
+        bool OnEvent(ftxui::Event event) override {
+            const int count = static_cast<int>(entries_->size());
+            if (event.is_mouse()) {
+                const ftxui::Mouse& mouse = event.mouse();
+                if (mouse.button != ftxui::Mouse::Left || mouse.motion != ftxui::Mouse::Pressed) {
+                    return false;
+                }
+                if (title_box_.Contain(mouse.x, mouse.y)) {
+                    TakeFocus();
+                    toggle();
+                    return true;
+                }
+                for (int i = 0; open_ && i < count; ++i) {
+                    if (boxes_[static_cast<std::size_t>(i)].Contain(mouse.x, mouse.y)) {
+                        TakeFocus();
+                        choose(i);
+                        return true;
+                    }
+                }
+                return false;
+            }
+            if (!Focused()) {
+                return false;
+            }
+            if (event == ftxui::Event::Return || event == ftxui::Event::Character(' ')) {
+                if (open_) {
+                    choose(highlighted_);
+                } else {
+                    toggle();
+                }
+                return true;
+            }
+            if (!open_) {
+                return false;  // closed: the arrows move between the rows of the tab
+            }
+            // open: the arrows move through the choices, and stay in the list.
+            if (event == ftxui::Event::ArrowUp || event == ftxui::Event::Character('k')) {
+                highlighted_ = std::max(0, highlighted_ - 1);
+                return true;
+            }
+            if (event == ftxui::Event::ArrowDown || event == ftxui::Event::Character('j')) {
+                highlighted_ = std::min(count - 1, highlighted_ + 1);
+                return true;
+            }
+            if (event == ftxui::Event::Escape) {
+                open_ = false;
+                return true;
+            }
+            return false;
+        }
+
+        bool Focusable() const override { return !entries_->empty(); }
+
+    private:
+        void toggle() {
+            open_ = !open_;
+            highlighted_ = *selected_;  // the keyboard starts on the current choice
+        }
+
+        void choose(int index) {
+            open_ = false;
+            if (index != *selected_) {
+                *selected_ = index;
+                if (on_change_) {
+                    on_change_();
+                }
+            }
+        }
+
+        const std::vector<std::string>* entries_;
+        int* selected_;
+        std::function<void()> on_change_;
+        bool open_ = false;
+        int highlighted_ = 0;
+        ftxui::Box title_box_;
+        std::vector<ftxui::Box> boxes_;
+    };
+
+}  // namespace
+
+ftxui::Component create_plain_dropdown(const std::vector<std::string>* entries, int* selected,
+                                       std::function<void()> on_change) {
+    return std::make_shared<PlainDropdown>(entries, selected, std::move(on_change));
 }
 
 // text button array (for tabs)

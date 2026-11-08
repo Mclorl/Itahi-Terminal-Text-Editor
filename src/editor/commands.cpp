@@ -20,27 +20,6 @@ namespace fs = std::filesystem;
 
 namespace {
 
-    enum class Argument { None, Optional, Required };
-
-    struct EditorCommand {
-        bool save;          // save the open file (or every unsaved file for "wa")
-        bool save_all;
-        bool quit;
-        bool open;          // open the file named by the argument
-        bool accepts_force; // whether a '!' may follow the name
-        Argument argument;  // a file name after the command
-    };
-
-    // every command the command line understands. A name only matches as a
-    // whole: "wq" is a command of its own, "qw" is not one.
-    const std::map<std::string, EditorCommand> editor_commands = {
-        {"w",  {true,  false, false, false, true,  Argument::Optional}}, // save; "w!" even if changed on disk; "w name" saves as
-        {"wa", {true,  true,  false, false, true,  Argument::None}},     // save every unsaved file
-        {"q",  {false, false, true,  false, true,  Argument::None}},     // quit, "q!" even with unsaved files
-        {"wq", {true,  false, true,  false, true,  Argument::None}},     // save, then quit
-        {"e",  {false, false, false, true,  false, Argument::Required}}, // open (or create) a file
-    };
-
     std::string trim(const std::string& s) {
         const std::size_t first = s.find_first_not_of(' ');
         if (first == std::string::npos) {
@@ -49,57 +28,62 @@ namespace {
         return s.substr(first, s.find_last_not_of(' ') - first + 1);
     }
 
-    // saves `text` as the file at `path` and marks it saved.
-    CommandResult save_file(const std::string& path, const std::string& text, bool force) {
-        if (!force && disk_changed_since_read(path)) {
-            return {false, "File changed on disk since it was opened (use >w! to overwrite)"};
-        }
-        const IoResult result = save_atomic(path, text);
-        if (!result.ok) {
-            return {false, "Could not save " + result.error};
-        }
-        content_read_first[path] = text;
-        content_user_updated[path].clear();
-        file_unsaved_status[path] = false;
-        remember_disk_stamp(path);
-        if (path == long_active_file_name) {
-            active_file = active_file_saved;
-        }
+    void redraw() {
         if (request_redraw) {
             request_redraw();
         }
-        return {true, "Saved " + path};
+    }
+
+    // writes `document` to its file and marks it saved.
+    CommandResult save_document(Document& document, bool force) {
+        if (!force && disk_changed_since_read(document.path())) {
+            return {false, "File changed on disk since it was opened (use >w! to overwrite)"};
+        }
+        const IoResult result = save_atomic(document.path(), document.text());
+        if (!result.ok) {
+            return {false, "Could not save " + result.error};
+        }
+        document.mark_saved();
+        remember_disk_stamp(document.path());
+        if (request_git_refresh) {
+            request_git_refresh();
+        }
+        redraw();
+        return {true, "Saved " + document.path()};
     }
 
     // the path the way the explorer writes it ("./src/a.cpp" when the editor
     // opened "."), so the open file and its folders match the explorer's rows.
     fs::path explorer_form(const fs::path& file) {
-        const fs::path relative = file.lexically_relative(workspace_root);
+        const fs::path relative = file.lexically_relative(workspace.root);
         if (relative.empty() || *relative.begin() == "..") {
             return file;  // outside the opened folder
         }
-        return fs::path(workspace_root) / relative;
+        return fs::path(workspace.root) / relative;
     }
 
     // opens every folder above `file` in the explorer and re-reads them, so a
     // newly created file shows up.
     void reveal_in_explorer(const fs::path& file) {
-        const fs::path relative = file.lexically_relative(workspace_root);
+        const fs::path relative = file.lexically_relative(workspace.root);
         if (!relative.empty() && *relative.begin() != "..") {
-            fs::path folder = workspace_root;
+            fs::path folder = workspace.root;
             for (const fs::path& part : relative.parent_path()) {
                 folder /= part;
-                opened_folders.insert(folder.string());
+                workspace.opened_folders.insert(folder.string());
             }
         }
         if (request_explorer_refresh) {
             request_explorer_refresh();
         }
+        if (request_git_refresh) {
+            request_git_refresh();
+        }
     }
 
     // ">e name": open a file. A file that doesn't exist yet is created right
     // away, with any missing folders, like vscode's New File.
-    CommandResult open_or_create(const std::string& typed) {
+    CommandResult open_or_create(const std::string& typed, bool) {
         const fs::path path = explorer_form(resolve_user_path(typed));
         std::error_code ec;
         const bool created = !fs::exists(path, ec);
@@ -118,8 +102,9 @@ namespace {
         } else if (fs::is_directory(path, ec)) {
             return {false, path.string() + " is a folder"};
         }
-        if (!open_file(path, content, active_file, long_active_file_name)) {
-            return {false, command_error};
+        std::string error;
+        if (!workspace.open(path, error)) {
+            return {false, error};
         }
         if (created) {
             reveal_in_explorer(path);
@@ -132,8 +117,11 @@ namespace {
 
     // ">w name": the buffer becomes the file `name` (the old file keeps what
     // is on disk).
-    CommandResult save_as(const std::string& typed, bool force) {
+    CommandResult save_as(Document& document, const std::string& typed, bool force) {
         const std::string name = explorer_form(resolve_user_path(typed)).string();
+        if (name != document.path() && workspace.find(name)) {
+            return {false, name + " is open in another tab (>b " + fs::path(name).filename().string() + " shows it)"};
+        }
         std::error_code ec;
         const bool created = !fs::exists(name, ec);
         if (!force && !created) {
@@ -143,62 +131,46 @@ namespace {
         if (!create_parent_folders(name, folder_error)) {
             return {false, "Could not create " + folder_error};
         }
-        const std::string old_path = long_active_file_name;
-        const std::string text = content;
-
-        const CommandResult saved = save_file(name, text, true);
-        if (!saved.ok) {
-            return saved;
+        const IoResult result = save_atomic(name, document.text());
+        if (!result.ok) {
+            return {false, "Could not save " + result.error};
         }
         // the edits now belong to the new file.
-        content_user_updated[old_path].clear();
-        file_unsaved_status[old_path] = false;
-        content_already_read[name] = true;
-
-        const std::string file_name = fs::path(name).filename().string();
-        active_file_not_saved = file_name + "*";
-        active_file_saved = file_name;
-        active_file = active_file_saved;
-        file_cursor[name] = cursor_index;
-        long_active_file_name = name;
+        document.set_path(name);
+        document.mark_saved();
+        remember_disk_stamp(name);
         if (created) {
             reveal_in_explorer(name);
+        } else if (request_git_refresh) {
+            request_git_refresh();
         }
-        return saved;
+        redraw();
+        return {true, "Saved " + name};
     }
 
     // ">123": move the cursor to the start of line 123.
     CommandResult go_to_line(const std::string& number) {
-        if (long_active_file_name.empty()) {
+        Document* document = workspace.active();
+        if (!document) {
             return {false, "No file is open"};
         }
-        int target = 0;
+        std::size_t target = 0;
         try {
-            target = std::stoi(number);
+            target = static_cast<std::size_t>(std::max(1L, std::stol(number)));
         } catch (const std::exception&) {
             return {false, "Not a line number: " + number};
         }
-        std::size_t offset = 0;
-        for (int line = 1; line < target; line++) {
-            const std::size_t newline = content.find('\n', offset);
-            if (newline == std::string::npos) {
-                break;
-            }
-            offset = newline + 1;
-        }
-        cursor_index = static_cast<int>(offset);
+        document->set_cursor(document->line_start(std::min(target, document->line_count()) - 1));
         return {true, ""};
     }
 
-}  // namespace
-
-namespace {
-
     // >s/old/new/[g] on the cursor's line, >%s/old/new/[g] on the whole file.
     CommandResult substitute(const std::string& command) {
-        if (long_active_file_name.empty()) {
+        Document* document = workspace.active();
+        if (!document) {
             return {false, "No file is open"};
         }
+        const std::string& content = document->text();
         const bool whole_file = command[0] == '%';
         const std::string spec = command.substr(whole_file ? 2 : 1);  // after "s" / "%s"
         if (spec.empty()) {
@@ -223,16 +195,13 @@ namespace {
         const std::string& new_text = parts[1];
         const bool global = parts.size() > 2 && parts[2].find('g') != std::string::npos;
 
+        const std::size_t cursor = document->cursor();
         std::size_t begin = 0;
         std::size_t end = content.size();
         if (!whole_file) {
-            const std::size_t at = static_cast<std::size_t>(std::clamp(cursor_index, 0, static_cast<int>(content.size())));
-            begin = at == 0 ? 0 : content.rfind('\n', at - 1);
-            begin = begin == std::string::npos || at == 0 ? 0 : begin + 1;
-            end = content.find('\n', at);
-            if (end == std::string::npos) {
-                end = content.size();
-            }
+            const std::size_t line = document->line_of(cursor);
+            begin = document->line_start(line);
+            end = line + 1 < document->line_count() ? document->line_start(line + 1) - 1 : content.size();
         }
 
         std::string replaced;
@@ -242,7 +211,6 @@ namespace {
             const std::regex re(old_text, std::regex::ECMAScript);
             count = static_cast<std::size_t>(std::distance(std::sregex_iterator(region.begin(), region.end(), re), std::sregex_iterator()));
             if (count > 0) {
-                std::string kept_lines;
                 // per line, so that without "g" only the first match of each line changes (like vim).
                 std::size_t line_start = 0;
                 while (line_start <= region.size()) {
@@ -250,13 +218,12 @@ namespace {
                     const bool last = line_end == std::string::npos;
                     if (last) line_end = region.size();
                     const std::string line = region.substr(line_start, line_end - line_start);
-                    kept_lines += std::regex_replace(line, re, new_text,
+                    replaced += std::regex_replace(line, re, new_text,
                         global ? std::regex_constants::format_default : std::regex_constants::format_first_only);
                     if (last) break;
-                    kept_lines += '\n';
+                    replaced += '\n';
                     line_start = line_end + 1;
                 }
-                replaced = kept_lines;
             }
         } catch (const std::regex_error& error) {
             return {false, std::string("Invalid pattern: ") + error.what()};
@@ -265,20 +232,172 @@ namespace {
             return {false, "Pattern not found: " + old_text};
         }
 
-        record_command_edit();
-        content.replace(begin, end - begin, replaced);
-        cursor_index = std::min(cursor_index, static_cast<int>(content.size()));
-        refresh_unsaved_status(content);
+        // one undo step; the cursor stays where it was.
+        document->replace(begin, end, replaced, false);
+        document->set_cursor(cursor);
         return {true, "Substituted " + std::to_string(count) + (count == 1 ? " match" : " matches")};
     }
+
+    // ">b name": show the open file called `name` (or the only one whose name starts with it).
+    CommandResult show_open_file(const std::string& name, bool) {
+        std::vector<Document*> matches;
+        for (const auto& document : workspace.documents()) {
+            if (document->name() == name || document->path() == name) {
+                matches = {document.get()};
+                break;
+            }
+            if (document->name().rfind(name, 0) == 0) {
+                matches.push_back(document.get());
+            }
+        }
+        if (matches.empty()) {
+            return {false, "No open file called " + name + " (>ls lists them)"};
+        }
+        if (matches.size() > 1) {
+            std::string names;
+            for (const Document* document : matches) {
+                names += "  " + document->name();
+            }
+            return {false, "Which one?" + names};
+        }
+        workspace.activate(matches[0]);
+        if (show_editor) {
+            show_editor();
+        }
+        return {true, matches[0]->path()};
+    }
+
+    // ">ls": the open files, the shown one in [brackets], unsaved ones with '*'.
+    CommandResult list_open_files(const std::string&, bool) {
+        if (workspace.documents().empty()) {
+            return {true, "No file is open"};
+        }
+        std::string list;
+        int number = 1;
+        for (const auto& document : workspace.documents()) {
+            std::string entry = std::to_string(number++) + " " + document->name() + (document->unsaved() ? "*" : "");
+            if (document.get() == workspace.active()) {
+                entry = "[" + entry + "]";
+            }
+            list += (list.empty() ? "" : "  ") + entry;
+        }
+        return {true, list};
+    }
+
+    CommandResult write_command(const std::string& argument, bool force) {
+        Document* document = workspace.active();
+        if (!argument.empty() && document) {
+            return save_as(*document, argument, force);
+        }
+        return save_active_file(force);
+    }
+
+    CommandResult write_all_command(const std::string&, bool force) {
+        for (const auto& document : workspace.documents()) {
+            if (!document->unsaved()) {
+                continue;
+            }
+            const CommandResult saved = save_document(*document, force);
+            if (!saved.ok) {
+                return saved;
+            }
+        }
+        return {true, "Saved every file"};
+    }
+
+    CommandResult quit_command(const std::string&, bool force) {
+        if (!force) {
+            if (const Document* unsaved = workspace.first_unsaved()) {
+                return {false, "Unsaved changes in " + unsaved->path() + " (>wa saves all, add ! to quit anyway)"};
+            }
+        }
+        if (request_quit) {
+            request_quit();
+        }
+        return {true, ""};
+    }
+
+    CommandResult write_quit_command(const std::string&, bool force) {
+        // the write failed and the changes are still only in memory: stop
+        // here so the quit can't lose them.
+        const CommandResult saved = save_active_file(force);
+        if (!saved.ok) {
+            return saved;
+        }
+        const CommandResult quit = quit_command("", force);
+        return quit.ok ? saved : quit;
+    }
+
+    CommandResult refresh_command(const std::string&, bool) {
+        if (request_explorer_refresh) {
+            request_explorer_refresh();
+        }
+        if (request_git_refresh) {
+            request_git_refresh();
+        }
+        return {true, "Explorer and Git status read again"};
+    }
+
+    enum class Argument { None, Optional, Required };
+
+    struct EditorCommand {
+        Argument argument;  // a file name (or another word) after the command
+        bool accepts_force; // whether a '!' may follow the name
+        CommandResult (*run)(const std::string& argument, bool force);
+    };
+
+    // every command the command line understands. A name only matches as a
+    // whole: "wq" is a command of its own, "qw" is not one.
+    const std::map<std::string, EditorCommand> editor_commands = {
+        {"w",       {Argument::Optional, true,  write_command}},      // save; "w!" even if changed on disk; "w name" saves as
+        {"wa",      {Argument::None,     true,  write_all_command}},  // save every unsaved file
+        {"q",       {Argument::None,     true,  quit_command}},       // quit, "q!" even with unsaved files
+        {"wq",      {Argument::None,     true,  write_quit_command}}, // save, then quit
+        {"e",       {Argument::Required, false, open_or_create}},     // open (or create) a file
+        {"u",       {Argument::None,     false, [](const std::string&, bool) { return undo_edit(); }}},
+        {"undo",    {Argument::None,     false, [](const std::string&, bool) { return undo_edit(); }}},
+        {"red",     {Argument::None,     false, [](const std::string&, bool) { return redo_edit(); }}},
+        {"redo",    {Argument::None,     false, [](const std::string&, bool) { return redo_edit(); }}},
+        {"bn",      {Argument::None,     false, [](const std::string&, bool) { return switch_file(+1); }}},  // next tab
+        {"bp",      {Argument::None,     false, [](const std::string&, bool) { return switch_file(-1); }}},  // previous tab
+        {"b",       {Argument::Required, false, show_open_file}},     // the open file with this name
+        {"bd",      {Argument::None,     true,  [](const std::string&, bool force) { return close_active_file(force); }}},
+        {"ls",      {Argument::None,     false, list_open_files}},
+        {"refresh", {Argument::None,     false, refresh_command}},    // read the folders and Git status again
+    };
 
 }  // namespace
 
 CommandResult save_active_file(bool force) {
-    if (long_active_file_name.empty()) {
+    Document* document = workspace.active();
+    if (!document) {
         return {false, "No file is open to save"};
     }
-    return save_file(long_active_file_name, content, force);
+    return save_document(*document, force);
+}
+
+CommandResult close_active_file(bool force) {
+    Document* document = workspace.active();
+    if (!document) {
+        return {false, "No file is open"};
+    }
+    if (!force && document->unsaved()) {
+        return {false, "Unsaved changes in " + document->path() + " (>w saves, >bd! closes without saving)"};
+    }
+    const std::string path = document->path();
+    workspace.close(document);
+    redraw();
+    return {true, ""};
+}
+
+CommandResult switch_file(int step) {
+    if (!workspace.cycle(step)) {
+        return {false, workspace.documents().empty() ? "No file is open" : "Only one file is open"};
+    }
+    if (show_editor) {
+        show_editor();
+    }
+    return {true, ""};  // the tab bar shows which file it is
 }
 
 CommandResult run_command(std::string command) {
@@ -300,15 +419,9 @@ CommandResult run_command(std::string command) {
     if (command.rfind("%s", 0) == 0 || (command.size() > 1 && command[0] == 's' && !std::isalpha(static_cast<unsigned char>(command[1])))) {
         return substitute(command);
     }
-    if (command == "u" || command == "undo") {
-        return undo_edit();
-    }
-    if (command == "red" || command == "redo") {
-        return redo_edit();
-    }
 
     // a command is a name made of letters, optionally followed by '!', then
-    // optionally a file name.
+    // optionally an argument (a file name).
     std::size_t name_end = 0;
     while (name_end < command.size() && std::isalpha(static_cast<unsigned char>(command[name_end]))) {
         name_end++;
@@ -338,49 +451,7 @@ CommandResult run_command(std::string command) {
         return {false, "Trailing characters: " + argument};
     }
     if (argument.empty() && action.argument == Argument::Required) {
-        return {false, "Argument required: >" + name + " file name"};
+        return {false, "Argument required: >" + name + (name == "b" ? " name of an open file" : " file name")};
     }
-
-    if (action.open) {
-        return open_or_create(argument);
-    }
-
-    std::string message;
-    if (action.save_all) {
-        for (const auto& [file, unsaved] : file_unsaved_status) {
-            if (!unsaved) {
-                continue;
-            }
-            const std::string text = file == long_active_file_name ? content : content_user_updated[file];
-            const CommandResult saved = save_file(file, text, force);
-            if (!saved.ok) {
-                return saved;
-            }
-        }
-        message = "Saved every file";
-    } else if (action.save) {
-        const CommandResult saved = argument.empty() ? save_active_file(force) : save_as(argument, force);
-
-        // the write failed and the changes are still only in memory: stop
-        // here so the quit of "wq" can't lose them.
-        if (!saved.ok) {
-            return saved;
-        }
-        message = saved.message;
-    }
-
-    if (action.quit) {
-        if (!force) {
-            for (const auto& [file, unsaved] : file_unsaved_status) {
-                if (unsaved) {
-                    return {false, "Unsaved changes in " + (file.empty() ? std::string("the open buffer") : file) + " (>wa saves all, add ! to quit anyway)"};
-                }
-            }
-        }
-        if (request_quit) {
-            request_quit();
-        }
-    }
-
-    return {true, message};
+    return action.run(argument, force);
 }

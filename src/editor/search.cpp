@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-#include "editor/state.hpp"
+#include "editor/workspace.hpp"
 
 namespace {
 
@@ -33,26 +33,28 @@ void search_preview(const std::string& pattern, bool backward) {
     state.active = true;
     state.pattern = pattern;
     state.backward = backward;
-    state.matches = find_all(content, pattern);
+    state.matches = workspace.active() ? find_all(workspace.active()->text(), pattern)
+                                       : std::vector<std::pair<std::size_t, std::size_t>>{};
     state.current = -1;
 }
 
 CommandResult search_step(bool reverse) {
-    if (long_active_file_name.empty()) {
+    Document* document = workspace.active();
+    if (!document) {
         return {false, "No file is open"};
     }
     if (state.pattern.empty()) {
         return {false, "No previous search"};
     }
     // the text may have changed since the matches were found (n / N later).
-    state.matches = find_all(content, state.pattern);
+    state.matches = find_all(document->text(), state.pattern);
     if (state.matches.empty()) {
         state.current = -1;
         return {false, "Pattern not found: " + state.pattern};
     }
 
     const bool up = state.backward != reverse;
-    const std::size_t at = static_cast<std::size_t>(std::max(cursor_index, 0));
+    const std::size_t at = document->cursor();
     // the first step goes to the first match at or after the cursor; the
     // next steps move on from the match the cursor is on.
     const bool first_step = state.current < 0;
@@ -82,7 +84,7 @@ CommandResult search_step(bool reverse) {
     }
 
     state.current = target;
-    cursor_index = static_cast<int>(state.matches[static_cast<std::size_t>(target)].first);
+    document->set_cursor(state.matches[static_cast<std::size_t>(target)].first);
     return {true, count_message() + wrapped};
 }
 

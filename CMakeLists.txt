@@ -29,7 +29,10 @@ add_library(itahi_core
   src/core/encoding.cpp
   src/core/file_io.cpp
   src/editor/commands.cpp
+  src/editor/config.cpp
+  src/editor/document.cpp
   src/editor/mode.cpp
+  src/editor/motion.cpp
   src/editor/paths.cpp
   src/editor/search.cpp
   src/editor/settings.cpp
@@ -40,18 +43,24 @@ add_library(itahi_core
   src/syntax/predicates.cpp
   src/syntax/theme.cpp
   ${ITAHI_GENERATED_DIR}/syntax_languages.cpp
+  src/ui/app_view.cpp
   src/ui/command_line.cpp
   src/ui/editor_view.cpp
   src/ui/explorer.cpp
+  src/ui/glyphs.cpp
   src/ui/key_listener.cpp
+  src/ui/key_router.cpp
   src/ui/menu_bar.cpp
   src/ui/menu_pages.cpp
-  src/ui/search_paint.cpp
-  src/ui/syntax_paint.cpp
+  src/ui/status_bar.cpp
+  src/ui/tab_bar.cpp
   src/ui/ui_state.cpp
   src/ui/widgets.cpp
-  src/ui/wrapped_view.cpp
+  src/platform/clipboard.cpp
+  src/platform/git.cpp
   src/platform/open_url.cpp
+  src/platform/process.cpp
+  src/platform/terminal.cpp
 )
 
 target_include_directories(itahi_core
@@ -61,12 +70,14 @@ target_include_directories(itahi_core
 
 target_compile_definitions(itahi_core PUBLIC ITAHI_VERSION_STRING="${PROJECT_VERSION}")
 
+find_package(Threads REQUIRED)
 target_link_libraries(itahi_core
   PUBLIC
     ftxui::screen
     ftxui::dom
     ftxui::component
     itahi_grammars
+    Threads::Threads
 )
 
 add_executable(itahi src/main.cpp)
@@ -91,8 +102,14 @@ if(ITAHI_BUILD_TESTS)
     tests/core/test_encoding.cpp
     tests/core/test_file_io.cpp
     tests/editor/test_commands.cpp
+    tests/editor/test_config.cpp
+    tests/editor/test_document.cpp
     tests/editor/test_paths.cpp
+    tests/editor/test_workspace.cpp
+    tests/platform/test_clipboard.cpp
+    tests/platform/test_git.cpp
     tests/ui/test_explorer.cpp
+    tests/ui/test_glyphs.cpp
   )
   target_include_directories(itahi_tests PRIVATE tests)
   target_link_libraries(itahi_tests PRIVATE itahi_core doctest::doctest)

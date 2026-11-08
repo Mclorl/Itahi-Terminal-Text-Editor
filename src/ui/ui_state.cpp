@@ -10,3 +10,5 @@ std::map<std::string, ftxui::Box> left_panel_row_boxes;
 
 std::string explorer_selected_path;
 bool explorer_selected_is_folder = false;
+
+GitStatus git_status;

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include <ftxui/component/event.hpp>
+#include <ftxui/dom/elements.hpp>
 
 #include "editor/commands.hpp"
 #include "editor/paths.hpp"
@@ -11,12 +12,93 @@
 
 std::function<void(const std::string&)> open_command_line;
 
+ftxui::Element command_line_area(const ftxui::Component& input) {
+    auto error_line = [] {
+        return ftxui::color(ftxui::Color::White, ftxui::bgcolor(ftxui::Color::Red, ftxui::text(command_error)));
+    };
+
+    if (mode != Mode::Command) {
+        if (!command_error.empty()) {
+            return error_line();
+        }
+        if (!command_output.empty()) {
+            return ftxui::dim(ftxui::text(command_output));
+        }
+        return ftxui::emptyElement();
+    }
+
+    ftxui::Element line = input->Render();
+    // >e / >w with a plain name: show the folder it will go to.
+    for (const char* prefix : {">e ", ">w! ", ">w "}) {
+        if (command_line.rfind(prefix, 0) == 0) {
+            const std::string name = command_line.substr(std::string(prefix).size());
+            // the folder the file will really be in, for what is typed now.
+            if (!name.empty() && name.back() != '/') {
+                std::string folder = resolve_user_path(name).parent_path().lexically_normal().string();
+                if (folder.empty() || folder == ".") {
+                    folder = "the opened folder";
+                } else if (folder.back() != '/') {
+                    folder += '/';
+                }
+                line = ftxui::hbox({line | ftxui::flex, ftxui::dim(ftxui::text(" in " + folder + "  Tab: complete  Enter: create / open "))});
+            }
+            break;
+        }
+    }
+
+    // a search shows where it is: "2 of 5", like vscode.
+    const SearchState& search = search_state();
+    if (search.active && !search.pattern.empty()) {
+        const std::string count = search.matches.empty() ? "No results"
+            : search.current < 0 ? std::to_string(search.matches.size()) + (search.matches.size() == 1 ? " match" : " matches")
+            : std::to_string(search.current + 1) + " of " + std::to_string(search.matches.size());
+        line = ftxui::hbox({line | ftxui::flex, ftxui::dim(ftxui::text(" " + count + "  Enter/Down: next  Up: previous  Esc: close "))});
+    }
+
+    // Tab's options: on a gray strip under the command line, every name,
+    // wrapped across as many rows as needed.
+    ftxui::Element options = ftxui::emptyElement();
+    if (!command_completions.empty()) {
+        ftxui::Elements names;
+        for (const std::string& name : command_completions) {
+            names.push_back(ftxui::text(name + "   "));
+        }
+        options = ftxui::color(ftxui::Color::White,
+            ftxui::bgcolor(ftxui::Color::GrayDark, ftxui::flexbox(std::move(names)) | ftxui::xflex));
+    }
+    if (command_error.empty()) {
+        return ftxui::vbox({line, options});
+    }
+    return ftxui::vbox({error_line(), line, options});
+}
+
+std::string command_line_ghost() {
+    // only at the end of ">e" or ">e " (no file name typed yet).
+    if (command_cursor_index != static_cast<int>(command_line.size())) {
+        return "";
+    }
+    if (command_line != ">e" && command_line != ">e ") {
+        return "";
+    }
+    const std::string folder = active_folder_for_command();
+    if (folder.empty()) {
+        return "";
+    }
+    return command_line == ">e" ? " " + folder : folder;
+}
+
 ftxui::Component command_line_input(std::function<void()> on_leave) {
     ftxui::InputOption option;
     option.multiline = false;
     option.cursor_position = &command_cursor_index;
+    // the ghost text sits right after the cursor, in gray: a suggestion only,
+    // not part of the command until Tab accepts it.
     option.transform = [](ftxui::InputState state) {
-        return state.element;
+        const std::string ghost = command_line_ghost();
+        if (ghost.empty() || !state.focused) {
+            return state.element;
+        }
+        return ftxui::hbox({state.element, ftxui::color(ftxui::Color::GrayDark, ftxui::text(ghost))});
     };
 
     ftxui::Component input = ftxui::Input(&command_line, "", option);
@@ -47,6 +129,13 @@ ftxui::Component command_line_input(std::function<void()> on_leave) {
 
         // the options listed by the last Tab stay only until the next key.
         command_completions.clear();
+
+        // Tab with a ghost shown: take the suggested folder.
+        if (event == ftxui::Event::Tab && !command_line_ghost().empty()) {
+            command_line += command_line_ghost();
+            command_cursor_index = static_cast<int>(command_line.size());
+            return true;
+        }
 
         // Tab completes the file name of >e, >w and >w!, like a shell's cd.
         if (event == ftxui::Event::Tab) {
