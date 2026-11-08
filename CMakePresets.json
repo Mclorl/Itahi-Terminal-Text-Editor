@@ -1,0 +1,15 @@
+{
+  "version": 6,
+  "configurePresets": [
+    { "name": "release", "binaryDir": "build",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" } },
+    { "name": "debug", "binaryDir": "build-debug",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" } },
+    { "name": "asan", "inherits": "debug", "binaryDir": "build-asan",
+      "cacheVariables": {
+        "CMAKE_CXX_FLAGS": "-fsanitize=address,undefined -fno-omit-frame-pointer"
+      } }
+  ],
+  "buildPresets": [ { "name": "release", "configurePreset": "release" } ],
+  "testPresets": [ { "name": "release", "configurePreset": "release" } ]
+}

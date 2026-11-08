@@ -1,70 +1,67 @@
 cmake_minimum_required(VERSION 3.14)
-project(ItahiTextEditor VERSION 0.0.1)
+project(ItahiTextEditor VERSION 0.0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Without this a plain "cmake -S . -B build" builds with no optimisation at all
+# (typing is ~5-10x slower on big files).
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
+endif()
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(ITAHI_LANGUAGES "all" CACHE STRING
+    "Languages to bundle: 'all' or a list such as C;C++;Python")
+option(ITAHI_WARNINGS_AS_ERRORS "Treat warnings in our own code as errors" OFF)
+option(ITAHI_BUILD_TESTS "Build the unit tests (downloads doctest)" ON)
+
 include(FetchContent)
- 
-FetchContent_Declare(ftxui
-  GIT_REPOSITORY https://github.com/ArthurSonzogni/FTXUI
-  GIT_TAG v7.0.2  # Replace with a version, tag, or commit hash
-  # keep Ctrl+H / Ctrl+J distinct from Backspace / Enter (see the patch file).
-  # skipped when the patch is already applied, so re-configuring is safe.
-  PATCH_COMMAND sh -c "git apply --reverse --check '${CMAKE_CURRENT_SOURCE_DIR}/patches/ftxui-ctrl-h-ctrl-j.patch' 2>/dev/null || git apply '${CMAKE_CURRENT_SOURCE_DIR}/patches/ftxui-ctrl-h-ctrl-j.patch'"
-  UPDATE_DISCONNECTED TRUE  # don't re-checkout the tag over the patched sources
-)
- 
-FetchContent_MakeAvailable(ftxui)
+include(cmake/Dependencies.cmake)
+include(cmake/Warnings.cmake)
 
 # syntax highlighting (tree-sitter + grammars), defines ITAHI_GENERATED_DIR.
-include(cmake/syntax_languages.cmake)
+include(cmake/SyntaxLanguages.cmake)
 
-add_library(my_library # libraries that needed to be compiled.
-  srcs/cpp_source/app_data.cpp
-  srcs/cpp_source/syntax_highlight.cpp
+# everything except main(): also linked by the tests. Folders are layers:
+# core <- editor, syntax <- ui <- main (see documentary/).
+add_library(itahi_core
+  src/core/encoding.cpp
+  src/core/file_io.cpp
+  src/editor/commands.cpp
+  src/editor/mode.cpp
+  src/editor/paths.cpp
+  src/editor/search.cpp
+  src/editor/settings.cpp
+  src/editor/state.cpp
+  src/editor/undo_history.cpp
+  src/editor/workspace.cpp
+  src/syntax/highlighter.cpp
+  src/syntax/predicates.cpp
+  src/syntax/theme.cpp
   ${ITAHI_GENERATED_DIR}/syntax_languages.cpp
-  srcs/cpp_source/custom_styling.cpp
-  srcs/cpp_source/file_entry.cpp
-  srcs/cpp_source/file_system_left_panel.cpp
-  srcs/cpp_source/functions.cpp
-  srcs/cpp_source/tab_contents.cpp
-  srcs/cpp_source/global_variables.cpp
-  srcs/cpp_source/mode.cpp
-  srcs/cpp_source/terminal_handling.cpp
-
-
-  # headers
-  srcs/library/app_data.hpp
-  srcs/library/file_system_left_panel.hpp
-  srcs/library/file_entry.hpp
-  srcs/library/custom_styling.hpp
-  srcs/library/tab_contents.hpp
-  srcs/library/global_variables.hpp
-  srcs/library/sets_of_tools.hpp
-  srcs/library/functions.hpp
-  srcs/library/terminal_handling.hpp
-  srcs/library/mode.hpp
-  srcs/library/syntax_highlight.hpp
-  srcs/library/syntax_languages.hpp
+  src/ui/command_line.cpp
+  src/ui/editor_view.cpp
+  src/ui/explorer.cpp
+  src/ui/key_listener.cpp
+  src/ui/menu_bar.cpp
+  src/ui/menu_pages.cpp
+  src/ui/search_paint.cpp
+  src/ui/syntax_paint.cpp
+  src/ui/ui_state.cpp
+  src/ui/widgets.cpp
+  src/ui/wrapped_view.cpp
+  src/platform/open_url.cpp
 )
 
-# the generated language table includes "syntax_languages.hpp".
-target_include_directories(my_library
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/srcs/library
-)
- 
-add_executable(main  # executable only one for now.
-  main.cpp
+target_include_directories(itahi_core
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_include_directories(main
-  PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/srcs/library
-)
+target_compile_definitions(itahi_core PUBLIC ITAHI_VERSION_STRING="${PROJECT_VERSION}")
 
-target_link_libraries(my_library
+target_link_libraries(itahi_core
   PUBLIC
     ftxui::screen
     ftxui::dom
@@ -72,7 +69,32 @@ target_link_libraries(my_library
     itahi_grammars
 )
 
-target_link_libraries(main
-  PRIVATE
-    my_library
-)
+add_executable(itahi src/main.cpp)
+target_link_libraries(itahi PRIVATE itahi_core)
+
+itahi_set_warnings(itahi_core)
+itahi_set_warnings(itahi)
+
+include(GNUInstallDirs)
+install(TARGETS itahi RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+
+if(ITAHI_BUILD_TESTS)
+  FetchContent_Declare(doctest
+    GIT_REPOSITORY https://github.com/doctest/doctest
+    GIT_TAG v2.4.12
+    GIT_SHALLOW TRUE)
+  FetchContent_MakeAvailable(doctest)
+
+  enable_testing()
+  add_executable(itahi_tests
+    tests/main.cpp
+    tests/core/test_encoding.cpp
+    tests/core/test_file_io.cpp
+    tests/editor/test_commands.cpp
+    tests/editor/test_paths.cpp
+    tests/ui/test_explorer.cpp
+  )
+  target_include_directories(itahi_tests PRIVATE tests)
+  target_link_libraries(itahi_tests PRIVATE itahi_core doctest::doctest)
+  add_test(NAME itahi_tests COMMAND itahi_tests)
+endif()

@@ -1,2 +1,8 @@
 build/
+build-*/
 out/
+documentary/
+.cache/
+.vscode/
+.idea/
+compile_commands.json
