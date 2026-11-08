@@ -91,7 +91,7 @@ The editor starts in **Normal mode**. Select a file in the explorer to open it.
 
 ### Keys
 
-| Key | Mode | Action |
+| Key | Mode (from) | Action |
 | --- | --- | --- |
 | `e` or `i` | Normal | Enter Edit mode (type in the file) |
 | `Esc` | Edit | Back to Normal mode (works wherever the focus is) |
