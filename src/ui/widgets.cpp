@@ -239,14 +239,137 @@ ftxui::Component make_numeric_input_row(std::string& target_var, const std::stri
 
     input_num = std::make_shared<PassVerticalArrows>(input_num);
 
-    return ftxui::Renderer(input_num, [input_num, label_text, max_digits_taken, max_width]() {
+    return ftxui::Renderer(input_num, [input_num, label_text, max_width]() {
         return ftxui::hbox({
-            ftxui::text(label_text),
+            menu_label(label_text),
+            ftxui::text("[ "),
             ftxui::underlined(
                 ftxui::size(ftxui::WIDTH, ftxui::EQUAL, max_width)(input_num->Render())
-            )
+            ),
+            ftxui::text(" ]"),
         });
     });
+}
+
+ftxui::Element menu_label(const std::string& label) {
+    // the labels of a page end in the same column, so the controls line up.
+    constexpr int label_columns = 24;
+    return ftxui::text(label) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, label_columns);
+}
+
+ftxui::Component menu_row(ftxui::Component inner, std::string hint) {
+    return ftxui::Renderer(inner, [inner, hint = std::move(hint)] {
+        const bool focused = inner->Focused();
+        // the margin on the left holds a bar while the row has the focus.
+        ftxui::Element bar = focused ? ftxui::bold(ftxui::text(" ┃ ")) : ftxui::text("   ");
+        ftxui::Element body = inner->Render();
+        if (!hint.empty()) {
+            constexpr int hint_column = 24;
+            body = ftxui::hbox({body | ftxui::size(ftxui::WIDTH, ftxui::GREATER_THAN, hint_column), ftxui::dim(ftxui::text("  " + hint))});
+        }
+        ftxui::Element row = ftxui::hbox({bar, body, ftxui::text("  ")});
+        return focused ? row | ftxui::focus : row;
+    });
+}
+
+ftxui::Component menu_title(std::string title) {
+    return ftxui::Renderer([title = std::move(title)] {
+        return ftxui::vbox({ftxui::text(""), ftxui::hbox({ftxui::text("   "), ftxui::bold(ftxui::text(title))}), ftxui::text("")});
+    });
+}
+
+ftxui::Component menu_gap() {
+    return ftxui::Renderer([] { return ftxui::text(""); });
+}
+
+namespace {
+
+    // a page of menu rows with its own scrolling. The mouse wheel moves the
+    // view wherever the focus is (FTXUI's own frame only follows the focused
+    // row, and its containers ignore keys while they don't have the focus, so
+    // a page reached with a click on the menu bar couldn't be scrolled);
+    // moving through the rows with the keyboard scrolls just enough to keep
+    // the focused row in view.
+    class MenuPage : public ftxui::ComponentBase {
+    public:
+        explicit MenuPage(ftxui::Components rows) : rows_(ftxui::Container::Vertical(std::move(rows))) {
+            Add(rows_);
+            row_boxes_.resize(rows_->ChildCount());
+        }
+
+        ftxui::Element OnRender() override {
+            ftxui::Elements drawn;
+            int focused = -1;
+            for (std::size_t i = 0; i < rows_->ChildCount(); ++i) {
+                ftxui::Component& row = rows_->ChildAt(i);
+                drawn.push_back(row->Render() | capture_box(row_boxes_[i]));
+                if (row->Focused()) {
+                    focused = static_cast<int>(i);
+                }
+            }
+            drawn.push_back(ftxui::text(""));
+
+            // the row with the focus changed (or grew: an opened dropdown):
+            // scroll to it. The boxes are the last frame's, so one more frame
+            // is asked for when the view had to move.
+            const ftxui::Box focused_box = focused >= 0 ? row_boxes_[static_cast<std::size_t>(focused)] : ftxui::Box{};
+            const int height = focused_box.y_max - focused_box.y_min;
+            if (focused >= 0 && (focused != followed_row_ || height != followed_height_ || follow_again_)) {
+                const int before = scroll_.top;
+                scroll_.keep_visible(focused_box.y_max - content_box_.y_min);
+                scroll_.keep_visible(focused_box.y_min - content_box_.y_min);
+                // the title above the first rows comes back into view with them.
+                if (focused_box.y_min - content_box_.y_min <= 3) {
+                    scroll_.top = 0;
+                }
+                follow_again_ = focused != followed_row_ && !follow_again_;
+                followed_row_ = focused;
+                followed_height_ = height;
+                if ((scroll_.top != before || follow_again_) && hooks.redraw) {
+                    hooks.redraw();
+                }
+            } else if (focused < 0) {
+                followed_row_ = -1;
+            }
+
+            return scroll_frame(white_vscroll_indicator(ftxui::vbox(std::move(drawn)) | capture_box(content_box_)), scroll_) |
+                   ftxui::flex | ftxui::reflect(box_);
+        }
+
+        bool OnEvent(ftxui::Event event) override {
+            if (event.is_mouse()) {
+                const ftxui::Mouse& mouse = event.mouse();
+                const bool wheel = mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown;
+                if (wheel && box_.Contain(mouse.x, mouse.y)) {
+                    // (not handed to the rows: their container would move the
+                    // focus with the wheel instead.)
+                    const int step = get_mouse_sensitivity();
+                    scroll_.scroll_by(mouse.button == ftxui::Mouse::WheelUp ? -step : step);
+                    return true;
+                }
+                // rows scrolled out of the page take no clicks.
+                if (!wheel && mouse.motion == ftxui::Mouse::Pressed && !box_.Contain(mouse.x, mouse.y)) {
+                    return false;
+                }
+            }
+            return rows_->OnEvent(event);
+        }
+
+    private:
+        ftxui::Component rows_;
+        std::vector<ftxui::Box> row_boxes_;
+        ftxui::Box content_box_;
+        ftxui::Box box_;
+        ScrollState scroll_;
+        int followed_row_ = -1;
+        int followed_height_ = 0;
+        bool follow_again_ = false;
+    };
+
+}  // namespace
+
+ftxui::Component menu_page(ftxui::Components rows) {
+    return std::make_shared<MenuPage>(std::move(rows));
 }
 
 ftxui::ButtonOption create_plain_button_option_symbol() {
@@ -268,7 +391,7 @@ ftxui::ButtonOption create_plain_button_option() {
     option.transform = [](const ftxui::EntryState& state) {
         auto e = ftxui::text("< " + state.label + " >");
         if (state.focused) {
-            return ftxui::bold(e);
+            return ftxui::bold(ftxui::inverted(e));
         }
         return e;
     };
@@ -306,25 +429,42 @@ namespace {
             const int count = static_cast<int>(entries_->size());
             *selected_ = std::clamp(*selected_, 0, std::max(0, count - 1));
             const bool focused = Focused();
+            if (!focused) {
+                open_ = false;  // a list left open would hang over the rows below it
+            }
             const std::string& current = count > 0 ? (*entries_)[static_cast<std::size_t>(*selected_)] : std::string();
 
+            // every choice has the same width, so the title doesn't jump when
+            // another one is picked and the list is a clean box.
+            int widest = 0;
+            for (const std::string& entry : *entries_) {
+                widest = std::max(widest, ftxui::string_width(entry));
+            }
+            const auto padded = [widest](const std::string& text) {
+                return text + std::string(static_cast<std::size_t>(std::max(0, widest - ftxui::string_width(text))), ' ');
+            };
+
             // the title, like a button: "< Keep cursor centered v >".
-            ftxui::Element title = ftxui::text("< " + current + (open_ ? " ^ >" : " v >"));
-            if (focused && !open_) {
+            ftxui::Element title = ftxui::text("< " + padded(current) + (open_ ? " ^ >" : " v >"));
+            if (focused) {
                 title = ftxui::bold(title);
             }
             ftxui::Elements rows{title | ftxui::reflect(title_box_)};
             boxes_.resize(static_cast<std::size_t>(count));
 
-            // open: every choice under it, like a checkbox: "(*) Keep cursor centered".
+            // open: the choices in a box under it, the current one marked
+            // "(*)", the one the keys are on highlighted.
             if (open_) {
+                ftxui::Elements choices;
                 for (int i = 0; i < count; ++i) {
-                    ftxui::Element choice = ftxui::text(std::string(i == *selected_ ? "(*) " : "( ) ") + (*entries_)[static_cast<std::size_t>(i)]);
-                    if (focused && i == highlighted_) {
-                        choice = ftxui::bold(choice);
+                    ftxui::Element choice = ftxui::text(std::string(i == *selected_ ? " (*) " : " ( ) ") +
+                                                        padded((*entries_)[static_cast<std::size_t>(i)]) + " ");
+                    if (i == highlighted_) {
+                        choice = ftxui::inverted(choice) | ftxui::focus;
                     }
-                    rows.push_back(ftxui::hbox({ftxui::text("  "), choice}) | ftxui::reflect(boxes_[static_cast<std::size_t>(i)]));
+                    choices.push_back(choice | ftxui::reflect(boxes_[static_cast<std::size_t>(i)]));
                 }
+                rows.push_back(ftxui::hbox({ftxui::border(ftxui::vbox(std::move(choices))), ftxui::filler()}));
             }
             return ftxui::vbox(std::move(rows));
         }
@@ -420,16 +560,12 @@ ftxui::Component create_text_button(const std::string& label, int tab_index, int
         
     option.transform = [label, tab_index, &selected_tab](const ftxui::EntryState& state) {
         if (selected_tab == tab_index + 1) {
-            return ftxui::bold(
-                ftxui::text("[" + label + "]")
-            );
-        } 
-        if (state.focused) {
-            return ftxui::bold(
-                ftxui::text(" " + label + " ")
-            );
+            return ftxui::bold(ftxui::text(" [" + label + "] "));
         }
-        return ftxui::text(" " + label + " ");
+        if (state.focused) {
+            return ftxui::bold(ftxui::text("  " + label + "  "));
+        }
+        return ftxui::text("  " + label + "  ");
     };
 
     return ftxui::Button(label, [tab_index, &selected_tab, &view_status]() {

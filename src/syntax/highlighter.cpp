@@ -26,59 +26,115 @@ namespace {
         return name.size() == family.size() || name[family.size()] == '.';
     }
 
-    SyntaxGroup group_for_capture(std::string_view name) {
-        // specific names first, then the generic families.
-        if (is_or_under(name, "comment")) return SyntaxGroup::Comment;
+    // a capture name and the group it is drawn as. `family`: the name and
+    // everything under it ("keyword" covers "keyword.return"); otherwise the
+    // name alone.
+    struct CaptureRule {
+        std::string_view name;
+        bool family;
+        SyntaxGroup group;
+    };
+
+    // checked in order, the first rule that fits wins: specific names first,
+    // then the generic families.
+    constexpr CaptureRule capture_rules[] = {
+        {"comment", true, SyntaxGroup::Comment},
 
         // markup (markdown, ...): both the current "markup.*" names and the
         // older "text.*" ones.
-        if (is_or_under(name, "markup.heading") || is_or_under(name, "text.title")) return SyntaxGroup::Heading;
-        if (is_or_under(name, "markup.raw") || is_or_under(name, "text.literal")) return SyntaxGroup::String;
-        if (is_or_under(name, "markup.link") || is_or_under(name, "text.uri") || is_or_under(name, "text.reference")) return SyntaxGroup::Tag;
-        if (is_or_under(name, "markup.list")) return SyntaxGroup::Special;
-        if (is_or_under(name, "markup.quote")) return SyntaxGroup::Comment;
-        if (is_or_under(name, "markup.math")) return SyntaxGroup::Number;
+        {"markup.heading", true, SyntaxGroup::Heading},
+        {"text.title", true, SyntaxGroup::Heading},
+        {"markup.raw", true, SyntaxGroup::String},
+        {"text.literal", true, SyntaxGroup::String},
+        {"markup.link", true, SyntaxGroup::Tag},
+        {"text.uri", true, SyntaxGroup::Tag},
+        {"text.reference", true, SyntaxGroup::Tag},
+        {"markup.list", true, SyntaxGroup::Special},
+        {"markup.quote", true, SyntaxGroup::Comment},
+        {"markup.math", true, SyntaxGroup::Number},
 
-        if (is_or_under(name, "diff.plus") || name == "addition" || is_or_under(name, "text.diff.add")) return SyntaxGroup::DiffAdded;
-        if (is_or_under(name, "diff.minus") || name == "deletion" || is_or_under(name, "text.diff.delete")) return SyntaxGroup::DiffRemoved;
-        if (is_or_under(name, "diff.delta")) return SyntaxGroup::Special;
-        if (is_or_under(name, "text.danger") || is_or_under(name, "text.warning") || is_or_under(name, "text.note")) return SyntaxGroup::Special;
+        {"diff.plus", true, SyntaxGroup::DiffAdded},
+        {"addition", false, SyntaxGroup::DiffAdded},
+        {"text.diff.add", true, SyntaxGroup::DiffAdded},
+        {"diff.minus", true, SyntaxGroup::DiffRemoved},
+        {"deletion", false, SyntaxGroup::DiffRemoved},
+        {"text.diff.delete", true, SyntaxGroup::DiffRemoved},
+        {"diff.delta", true, SyntaxGroup::Special},
+        {"text.danger", true, SyntaxGroup::Special},
+        {"text.warning", true, SyntaxGroup::Special},
+        {"text.note", true, SyntaxGroup::Special},
 
         // TextMate-style names used by a few grammars (elm, glsl, ...).
-        if (is_or_under(name, "character.escape") || is_or_under(name, "regexp")) return SyntaxGroup::Special;
-        if (is_or_under(name, "char")) return SyntaxGroup::String;
-        if (is_or_under(name, "identifier.constant")) return SyntaxGroup::Constant;
-        if (is_or_under(name, "identifier.parameter") || is_or_under(name, "parameter")) return SyntaxGroup::Variable;
-        if (is_or_under(name, "local.function")) return SyntaxGroup::Function;
-        if (is_or_under(name, "storage.type") || is_or_under(name, "union")) return SyntaxGroup::Type;
-        if (is_or_under(name, "meta.import")) return SyntaxGroup::Keyword;
-        if (is_or_under(name, "conditional.ternary")) return SyntaxGroup::Operator;
+        {"character.escape", true, SyntaxGroup::Special},
+        {"regexp", true, SyntaxGroup::Special},
+        {"char", true, SyntaxGroup::String},
+        {"identifier.constant", true, SyntaxGroup::Constant},
+        {"identifier.parameter", true, SyntaxGroup::Variable},
+        {"parameter", true, SyntaxGroup::Variable},
+        {"local.function", true, SyntaxGroup::Function},
+        {"storage.type", true, SyntaxGroup::Type},
+        {"union", true, SyntaxGroup::Type},
+        {"meta.import", true, SyntaxGroup::Keyword},
+        {"conditional.ternary", true, SyntaxGroup::Operator},
 
-        if (name == "escape" || is_or_under(name, "string.escape") || is_or_under(name, "string.special.regex") || is_or_under(name, "string.regex") || is_or_under(name, "character.special")) return SyntaxGroup::Special;
-        if (name == "string.special.key") return SyntaxGroup::Property;      // json keys
-        if (name == "string.special.symbol") return SyntaxGroup::Constant;   // ruby :symbols
-        if (is_or_under(name, "string") || name == "character") return SyntaxGroup::String;
+        {"escape", false, SyntaxGroup::Special},
+        {"string.escape", true, SyntaxGroup::Special},
+        {"string.special.regex", true, SyntaxGroup::Special},
+        {"string.regex", true, SyntaxGroup::Special},
+        {"character.special", true, SyntaxGroup::Special},
+        {"string.special.key", false, SyntaxGroup::Property},     // json keys
+        {"string.special.symbol", false, SyntaxGroup::Constant},  // ruby :symbols
+        {"string", true, SyntaxGroup::String},
+        {"character", false, SyntaxGroup::String},
 
-        if (is_or_under(name, "number") || name == "float") return SyntaxGroup::Number;
-        if (name == "boolean" || is_or_under(name, "constant") || is_or_under(name, "variable.builtin")) return SyntaxGroup::Constant;
+        {"number", true, SyntaxGroup::Number},
+        {"float", false, SyntaxGroup::Number},
+        {"boolean", false, SyntaxGroup::Constant},
+        {"constant", true, SyntaxGroup::Constant},
+        {"variable.builtin", true, SyntaxGroup::Constant},
 
-        if (name == "function.macro" || name == "preproc" || is_or_under(name, "keyword.directive")) return SyntaxGroup::Preprocessor;
-        if (is_or_under(name, "function") || is_or_under(name, "method")) return SyntaxGroup::Function;
-        if (is_or_under(name, "type") || is_or_under(name, "constructor") || is_or_under(name, "namespace") || is_or_under(name, "module")) return SyntaxGroup::Type;
+        {"function.macro", false, SyntaxGroup::Preprocessor},
+        {"preproc", false, SyntaxGroup::Preprocessor},
+        {"keyword.directive", true, SyntaxGroup::Preprocessor},
+        {"function", true, SyntaxGroup::Function},
+        {"method", true, SyntaxGroup::Function},
+        {"type", true, SyntaxGroup::Type},
+        {"constructor", true, SyntaxGroup::Type},
+        {"namespace", true, SyntaxGroup::Type},
+        {"module", true, SyntaxGroup::Type},
 
-        if (is_or_under(name, "property") || name == "field") return SyntaxGroup::Property;
-        if (is_or_under(name, "variable") || name == "parameter") return SyntaxGroup::Variable;
+        {"property", true, SyntaxGroup::Property},
+        {"field", false, SyntaxGroup::Property},
+        {"variable", true, SyntaxGroup::Variable},
 
-        if (is_or_under(name, "keyword")) return SyntaxGroup::Keyword;
-        for (std::string_view keyword_like : {"conditional", "repeat", "label", "import", "include", "exception", "storageclass", "charset", "media", "keyframes", "supports"}) {
-            if (name == keyword_like) return SyntaxGroup::Keyword;
+        {"keyword", true, SyntaxGroup::Keyword},
+        {"conditional", false, SyntaxGroup::Keyword},
+        {"repeat", false, SyntaxGroup::Keyword},
+        {"label", false, SyntaxGroup::Keyword},
+        {"import", false, SyntaxGroup::Keyword},
+        {"include", false, SyntaxGroup::Keyword},
+        {"exception", false, SyntaxGroup::Keyword},
+        {"storageclass", false, SyntaxGroup::Keyword},
+        {"charset", false, SyntaxGroup::Keyword},
+        {"media", false, SyntaxGroup::Keyword},
+        {"keyframes", false, SyntaxGroup::Keyword},
+        {"supports", false, SyntaxGroup::Keyword},
+
+        {"operator", true, SyntaxGroup::Operator},
+        {"punctuation", true, SyntaxGroup::Punctuation},
+        {"delimiter", false, SyntaxGroup::Punctuation},
+        {"tag", true, SyntaxGroup::Tag},
+        {"attribute", true, SyntaxGroup::Tag},
+        {"annotation", true, SyntaxGroup::Tag},
+    };
+
+    SyntaxGroup group_for_capture(std::string_view name) {
+        for (const CaptureRule& rule : capture_rules) {
+            if (rule.family ? is_or_under(name, rule.name) : name == rule.name) {
+                return rule.group;
+            }
         }
-
-        if (is_or_under(name, "operator")) return SyntaxGroup::Operator;
-        if (is_or_under(name, "punctuation") || name == "delimiter") return SyntaxGroup::Punctuation;
-        if (is_or_under(name, "tag") || is_or_under(name, "attribute") || is_or_under(name, "annotation")) return SyntaxGroup::Tag;
-
-        return SyntaxGroup::None; // eg. @embedded, @none
+        return SyntaxGroup::None;  // eg. @embedded, @none
     }
 
 
@@ -170,36 +226,8 @@ static TSParser* shared_parser() {
     return parser;
 }
 
-static TSPoint point_at(const std::string& text, std::size_t byte) {
-    const auto begin = text.begin();
-    const auto row = std::count(begin, begin + static_cast<std::ptrdiff_t>(byte), '\n');
-    const std::size_t line_start = text.rfind('\n', byte == 0 ? 0 : byte - 1);
-    const std::size_t column = (byte == 0 || line_start == std::string::npos) ? byte : byte - line_start - 1;
-    return {static_cast<uint32_t>(row), static_cast<uint32_t>(column)};
-}
-
-// tell the old tree which bytes changed (the part between the common
-// prefix and suffix), so tree-sitter can reuse everything else.
-static void edit_tree(TSTree* tree, const std::string& old_text, const std::string& new_text) {
-    const std::size_t max_common = std::min(old_text.size(), new_text.size());
-
-    std::size_t prefix = 0;
-    while (prefix < max_common && old_text[prefix] == new_text[prefix]) {
-        prefix++;
-    }
-    std::size_t suffix = 0;
-    while (suffix < max_common - prefix && old_text[old_text.size() - 1 - suffix] == new_text[new_text.size() - 1 - suffix]) {
-        suffix++;
-    }
-
-    TSInputEdit edit;
-    edit.start_byte = static_cast<uint32_t>(prefix);
-    edit.old_end_byte = static_cast<uint32_t>(old_text.size() - suffix);
-    edit.new_end_byte = static_cast<uint32_t>(new_text.size() - suffix);
-    edit.start_point = point_at(old_text, edit.start_byte);
-    edit.old_end_point = point_at(old_text, edit.old_end_byte);
-    edit.new_end_point = point_at(new_text, edit.new_end_byte);
-    ts_tree_edit(tree, &edit);
+static TSPoint ts_point(const TextPoint& point) {
+    return {static_cast<uint32_t>(point.row), static_cast<uint32_t>(point.column)};
 }
 
 HighlightCache::~HighlightCache() {
@@ -213,6 +241,9 @@ namespace {
     // the caches of the files shown most recently, the latest first. A few
     // are kept so switching between tabs doesn't parse the files again.
     constexpr std::size_t max_cached_files = 8;
+    // colored parts kept per file: one for each window that can show it.
+    constexpr std::size_t max_colored_parts = 4;
+
     std::vector<std::unique_ptr<HighlightCache>>& caches() {
         static std::vector<std::unique_ptr<HighlightCache>> list;
         return list;
@@ -225,13 +256,16 @@ void forget_highlights(const std::string& path) {
     list.erase(std::remove_if(list.begin(), list.end(), [&](const auto& c) { return c->path == path; }), list.end());
 }
 
-HighlightCache& highlights_for(const std::string& text, const std::string& path, std::uint64_t version) {
+HighlightCache& highlights_for(const std::string& text, const std::string& path, std::uint64_t document_id,
+                               std::uint64_t version, const EditsSince& edits_since) {
     auto& list = caches();
     auto found = std::find_if(list.begin(), list.end(), [&](const auto& c) { return c->path == path; });
     if (found == list.end()) {
         list.insert(list.begin(), std::make_unique<HighlightCache>());
         list.front()->path = path;
+        list.front()->document_id = document_id;
         list.front()->language_index = language_index_for(path);
+        list.front()->colored.reserve(max_colored_parts);
         if (list.size() > max_cached_files) {
             list.pop_back();
         }
@@ -242,41 +276,65 @@ HighlightCache& highlights_for(const std::string& text, const std::string& path,
     }
     HighlightCache& cache = **found;
 
-    const bool up_to_date = version != UINT64_MAX ? cache.version == version && cache.content.size() == text.size()
-                                                  : cache.content == text;
-    if (up_to_date && (cache.tree || cache.language_index < 0)) {
+    // the file was closed and opened again: nothing known about it holds.
+    if (cache.document_id != document_id) {
+        if (cache.tree) {
+            ts_tree_delete(cache.tree);
+            cache.tree = nullptr;
+        }
+        cache.document_id = document_id;
+        cache.version = UINT64_MAX;
+        cache.language_index = language_index_for(path);
+    }
+    if (cache.version == version) {
         return cache;
     }
 
     TSTree* old_tree = cache.tree;
-    if (old_tree) {
-        edit_tree(old_tree, cache.content, text);
-    }
     cache.tree = nullptr;
+    cache.colored.clear();
+    cache.too_large = text.size() > max_highlight_bytes;
 
-    cache.content = text;
-    cache.version = version;
-    cache.colored_begin = cache.colored_end = 0;
-    cache.byte_groups.assign(text.size(), static_cast<unsigned char>(SyntaxGroup::None));
+    if (cache.language_index >= 0 && !cache.too_large) {
+        // tell the old tree what changed, so tree-sitter parses only that
+        // again. Changes nobody can list: parse from the start.
+        std::vector<TextEdit> edits;
+        if (old_tree && edits_since && cache.version != UINT64_MAX && edits_since(cache.version, edits)) {
+            for (const TextEdit& edit : edits) {
+                TSInputEdit input;
+                input.start_byte = static_cast<uint32_t>(edit.start);
+                input.old_end_byte = static_cast<uint32_t>(edit.old_end);
+                input.new_end_byte = static_cast<uint32_t>(edit.new_end);
+                input.start_point = ts_point(edit.start_point);
+                input.old_end_point = ts_point(edit.old_end_point);
+                input.new_end_point = ts_point(edit.new_end_point);
+                ts_tree_edit(old_tree, &input);
+            }
+        } else if (old_tree) {
+            ts_tree_delete(old_tree);
+            old_tree = nullptr;
+        }
 
-    if (cache.language_index >= 0) {
         LoadedLanguage* lang = loaded_language(static_cast<std::size_t>(cache.language_index));
         if (lang->query && ts_parser_set_language(shared_parser(), lang->language)) {
             cache.tree = ts_parser_parse_string(shared_parser(), old_tree, text.data(), static_cast<uint32_t>(text.size()));
+        }
+        if (!cache.tree) {
+            cache.language_index = -1;  // the grammar failed: plain text.
         }
     }
     if (old_tree) {
         ts_tree_delete(old_tree);
     }
-    if (!cache.tree) {
-        cache.language_index = -1; // no grammar (or it failed): plain text.
-    }
+    cache.version = version;
     return cache;
 }
 
-// run the highlight query over [begin, end) and store the groups.
-static void color_range(HighlightCache& cache, std::size_t begin, std::size_t end) {
+// run the highlight query over the part and store the groups.
+static void color_part(HighlightCache& cache, HighlightCache::Colored& part, const std::string& text) {
     LoadedLanguage* lang = loaded_language(static_cast<std::size_t>(cache.language_index));
+    const std::size_t begin = part.begin;
+    const std::size_t end = part.end;
 
     struct Span {
         uint32_t start;
@@ -292,7 +350,7 @@ static void color_range(HighlightCache& cache, std::size_t begin, std::size_t en
 
     TSQueryMatch match;
     while (ts_query_cursor_next_match(cursor, &match)) {
-        if (!predicates_pass(lang->predicates[match.pattern_index], match, cache.content)) {
+        if (!predicates_pass(lang->predicates[match.pattern_index], match, text)) {
             continue;
         }
         for (uint16_t i = 0; i < match.capture_count; ++i) {
@@ -321,28 +379,43 @@ static void color_range(HighlightCache& cache, std::size_t begin, std::size_t en
         return a.pattern < b.pattern;
     });
 
-    std::fill(cache.byte_groups.begin() + begin, cache.byte_groups.begin() + end, static_cast<unsigned char>(SyntaxGroup::None));
+    part.groups.assign(end - begin, static_cast<unsigned char>(SyntaxGroup::None));
     for (const Span& span : spans) {
-        // spans can reach outside the range (eg. a long comment); clip them.
+        // spans can reach outside the part (eg. a long comment); clip them.
         const std::size_t span_begin = std::max<std::size_t>(span.start, begin);
         const std::size_t span_end = std::min<std::size_t>(span.end, end);
         if (span_begin < span_end) {
-            std::fill(cache.byte_groups.begin() + span_begin, cache.byte_groups.begin() + span_end, static_cast<unsigned char>(span.group));
+            std::fill(part.groups.begin() + static_cast<std::ptrdiff_t>(span_begin - begin),
+                      part.groups.begin() + static_cast<std::ptrdiff_t>(span_end - begin), static_cast<unsigned char>(span.group));
         }
     }
-
-    cache.colored_begin = begin;
-    cache.colored_end = end;
 }
 
-// make sure [begin, end) has colors. A margin around it is colored too, so
-// small scrolls don't re-run the query.
-void ensure_colored(HighlightCache& cache, std::size_t begin, std::size_t end) {
-    if (begin >= cache.colored_begin && end <= cache.colored_end) {
-        return;
+const HighlightCache::Colored& colored_part(HighlightCache& cache, const std::string& text, std::size_t begin, std::size_t end) {
+    end = std::min(end, text.size());
+    begin = std::min(begin, end);
+    ++cache.uses;
+    for (HighlightCache::Colored& part : cache.colored) {
+        if (begin >= part.begin && end <= part.end) {
+            part.last_used = cache.uses;
+            return part;
+        }
+    }
+    // a new part, in the place of the one unused for the longest when there
+    // are enough of them (two windows far apart in one file keep one each).
+    HighlightCache::Colored* part = nullptr;
+    if (cache.colored.size() < max_colored_parts) {
+        part = &cache.colored.emplace_back();
+    } else {
+        part = &*std::min_element(cache.colored.begin(), cache.colored.end(),
+                                  [](const auto& a, const auto& b) { return a.last_used < b.last_used; });
     }
     constexpr std::size_t margin = 16 * 1024;
-    color_range(cache, begin > margin ? begin - margin : 0, std::min(end + margin, cache.content.size()));
+    part->begin = begin > margin ? begin - margin : 0;
+    part->end = std::min(end + margin, text.size());
+    part->last_used = cache.uses;
+    color_part(cache, *part, text);
+    return *part;
 }
 
 std::string syntax_language_name(const std::string& path) {

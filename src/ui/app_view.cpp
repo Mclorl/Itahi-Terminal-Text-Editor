@@ -1,6 +1,7 @@
 #include "ui/app_view.hpp"
 
 #include <algorithm>
+#include <csignal>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -13,10 +14,14 @@
 
 #include "core/version.hpp"
 #include "editor/config.hpp"
+#include "editor/commands.hpp"
 #include "editor/mode.hpp"
+#include "editor/paths.hpp"
+#include "editor/recovery.hpp"
 #include "editor/settings.hpp"
 #include "editor/state.hpp"
 #include "editor/workspace.hpp"
+#include "platform/file_watcher.hpp"
 #include "platform/git.hpp"
 #include "ui/command_line.hpp"
 #include "ui/editor_view.hpp"
@@ -29,6 +34,7 @@
 #include "ui/tab_bar.hpp"
 #include "ui/ui_state.hpp"
 #include "ui/widgets.hpp"
+#include "ui/window_grid.hpp"
 
 namespace fs = std::filesystem;
 
@@ -96,129 +102,86 @@ namespace {
         bool again_ = false;
     };
 
+    // a container keeps Left / Right for itself when its rows don't use them,
+    // so they never throw the focus from a menu page into the explorer.
+    class KeepSideArrows : public ftxui::ComponentBase {
+    public:
+        explicit KeepSideArrows(ftxui::Component child) { Add(std::move(child)); }
+
+        bool OnEvent(ftxui::Event event) override {
+            if (ftxui::ComponentBase::OnEvent(event)) {
+                return true;
+            }
+            return event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight ||
+                   event == ftxui::Event::Character('h') || event == ftxui::Event::Character('l');
+        }
+    };
+
+    // the row at the bottom of the main view: the command line while typing
+    // a command, else a message (until the next key), else the status bar.
+    ftxui::Element bottom_row(const ftxui::Component& command_line_component) {
+        const bool message = !command_error.empty() || !command_output.empty();
+        if (mode == Mode::Command || message || !settings.show_status_bar) {
+            return command_line_area(command_line_component);
+        }
+        return status_bar_element();
+    }
+
+    // the terminal's window was closed (SIGHUP) or the editor was asked to
+    // end (SIGTERM). FTXUI catches both, puts the terminal back as it was,
+    // then hands the signal to the handler that was there before it: this
+    // one, called from FTXUI's own code and not in the middle of anything.
+    // The unsaved changes are kept for the next start, then the signal does
+    // what it always does.
+    void keep_changes_then_end(int signal_number) {
+        const int kept = keep_all_recovery_copies();
+        if (kept > 0) {
+            std::cerr << "Itahi was closed with unsaved changes: " << kept << (kept == 1 ? " file was" : " files were")
+                      << " kept. Start it again and type >recover to bring them back." << std::endl;
+        }
+        std::signal(signal_number, SIG_DFL);
+        std::raise(signal_number);
+    }
+
 }  // namespace
 
 int run_app(const AppOptions& options) {
     ftxui::ScreenInteractive screen_instance = ftxui::ScreenInteractive::Fullscreen();
     screen = &screen_instance;
 
-    int left_panel_width = 25;  // the explorer's width, changed by dragging the separator
+    int left_panel_width = std::clamp(settings.explorer_width, min_explorer_width, max_explorer_width);
     const bool has_explorer = !options.single_file;
 
-    std::shared_ptr<EditorView> editor = make_editor_view();
+    std::shared_ptr<WindowGrid> windows = make_window_grid();
     GitRefresher git(options.folder.string());
-
-    // --- the menu tabs ---
-    ftxui::Component file_back_button_container = ftxui::Container::Horizontal({file_back_button_func()});
-    ftxui::Component file_tab_container = ftxui::Container::Vertical({
-        file_btn_new_file_func(),
-        file_btn_save_file_func(),
-        file_btn_close_file_func(),
-    });
-    ftxui::Component edit_tab_container = ftxui::Container::Vertical({
-        edit_btn_undo_func(),
-        edit_btn_redo_func(),
-        edit_btn_cut_func(*editor),
-        edit_btn_copy_func(*editor),
-        edit_btn_paste_func(*editor),
-        edit_btn_select_all_func(*editor),
-    });
-    ftxui::Component view_tab_container = ftxui::Container::Vertical({
-        toggle_linenums_func(),
-        toggle_underline_active_row_on_numbers_func(),
-        toggle_underline_active_row_func(),
-        active_row_style_row_func(),
-        toggle_syntax_highlighting_func(),
-        toggle_word_wrap_func(),
-        toggle_status_bar_func(),
-        toggle_tabs_func(),
-        theme_row_func(),
-        syntax_color_settings_func(),
-    });
-    ftxui::Component settings_tab_container = ftxui::Container::Vertical({
-        mouse_sens_row_func(),
-        tab_size_row_func(),
-        toggle_tab_inserts_spaces_func(),
-        scroll_style_row_func(),
-    });
-    ftxui::Component help_tab_container = ftxui::Container::Vertical({
-        warning_text_link_direct_func(),
-        btn_about_func(),
-        btn_ftxui_about_func(),
-    });
 
     // created further down, once the containers it gives the focus back to exist.
     ftxui::Component command_line_component;
 
-    // --- the main view: the editor, the binary file warning, or the greeting ---
-    // "Open Anyway" for a binary / unsupported encoding file (like vscode).
-    ftxui::Component open_anyway_button = ftxui::Button("Open Anyway", [] {
-        if (Document* document = workspace.active()) {
-            document->open_anyway();
-        }
-    }, create_plain_button_option());
-
-    enum MainViewPage { EDITOR_PAGE, BINARY_WARNING_PAGE, GREETING_PAGE };
-    int main_view_page = EDITOR_PAGE;
-    ftxui::Component main_view_pages = ftxui::Container::Tab({
-        editor,
-        open_anyway_button,
-        ftxui::Renderer([] { return ftxui::emptyElement(); }),  // greeting: nothing to focus
-    }, &main_view_page);
-
-    // the pages first: the first child is the one the keys go to, and the
+    // --- the main view: the tabs, the windows, the bottom row ---
+    // the windows first: the first child is the one the keys go to, and the
     // tab bar only takes clicks (it is drawn above them all the same).
     ftxui::Component tab_bar = make_tab_bar();
-    ftxui::Component main_view_container = ftxui::Container::Vertical({main_view_pages, tab_bar});
-
+    ftxui::Component main_view_container = ftxui::Container::Vertical({windows, tab_bar});
     ftxui::Component main_view = ftxui::Renderer(main_view_container, [&] {
-        const Document* document = workspace.active();
-        main_view_page = !document ? GREETING_PAGE : document->hidden_as_binary() ? BINARY_WARNING_PAGE : EDITOR_PAGE;
-
-        ftxui::Element page;
-        if (main_view_page == EDITOR_PAGE) {
-            page = editor->Render();
-        } else if (main_view_page == BINARY_WARNING_PAGE) {
-            page = ftxui::vcenter(ftxui::vbox({
-                ftxui::hcenter(ftxui::bold(ftxui::color(ftxui::Color::Yellow, ftxui::text("Warning")))),
-                ftxui::separatorEmpty(),
-                ftxui::paragraphAlignCenter("The file is not displayed in the text editor because it is either binary or uses an unsupported text encoding."),
-                ftxui::dim(ftxui::paragraphAlignCenter("Opening it anyway could break the Itahi Text Editor.")),
-                ftxui::separatorEmpty(),
-                ftxui::hcenter(open_anyway_button->Render()),
-            }));
-        } else {
-            page = ftxui::vcenter(ftxui::vbox({
-                ftxui::hcenter(ftxui::bold(ftxui::text("Welcome to Itahi Text Editor" + ITAHI_VERSION))),
-                ftxui::separatorEmpty(),
-                ftxui::dim(ftxui::paragraphAlignCenter("Select a file in the Explorer panel on the left to start editing.")),
-            }));
-        }
-
         ftxui::Elements rows;
-        if (document && settings.show_tabs) {
+        if (!workspace.documents().empty() && settings.show_tabs) {
             rows.push_back(tab_bar->Render());
         }
-        rows.push_back(ftxui::flex(page));
-        // one row at the bottom: the command line while typing a command, else a
-        // message (until the next key), else the status bar.
-        const bool message = !command_error.empty() || !command_output.empty();
-        if (mode == Mode::Command || message || !settings.show_status_bar) {
-            rows.push_back(command_line_area(command_line_component));
-        } else {
-            rows.push_back(status_bar_element());
-        }
+        rows.push_back(ftxui::flex(windows->Render()));
+        rows.push_back(bottom_row(command_line_component));
         return ftxui::flex(ftxui::border(ftxui::vbox(std::move(rows))));
     });
 
-    // Master Tab Container
+    // --- the menu tabs, one page each ---
+    ftxui::Component file_back_button_container = ftxui::Container::Horizontal({file_back_button_func()});
     ftxui::Component tab_content = ftxui::Container::Tab({
         main_view,
-        file_tab_container,
-        edit_tab_container,
-        view_tab_container,
-        settings_tab_container,
-        help_tab_container,
+        make_file_page(),
+        make_edit_page([windows]() -> EditorView& { return windows->active_editor(); }),
+        make_view_page(),
+        make_settings_page(),
+        make_help_page(),
     }, &tab_selected);
 
     // --- the explorer ---
@@ -227,14 +190,35 @@ int run_app(const AppOptions& options) {
         explorer = make_explorer_panel(options.folder, left_panel_width);
     }
 
+    // the folders on screen, the ones the open files are in and Git's own are
+    // watched: what another program changes in them shows up by itself.
+    std::unique_ptr<FileWatcher> watcher;
+    auto watch_folders = [&] {
+        if (!watcher) {
+            return;
+        }
+        std::vector<std::string> folders = has_explorer ? explorer.shown_folders() : std::vector<std::string>{};
+        for (const auto& document : workspace.documents()) {
+            const std::string folder = fs::path(document->path()).parent_path().string();
+            folders.push_back(folder.empty() ? "." : folder);
+        }
+        if (git_status.in_repository && !git_status.top_level.empty()) {
+            folders.push_back(git_status.top_level + "/.git");
+        }
+        std::sort(folders.begin(), folders.end());
+        folders.erase(std::unique(folders.begin(), folders.end()), folders.end());
+        watcher->watch(folders);
+    };
+
     // a file was created (>e, New File, >w name) or F5: list the folders again.
-    request_explorer_refresh = [&] {
+    hooks.refresh_explorer = [&] {
         if (has_explorer) {
             explorer.refresh();
         }
+        watch_folders();
         screen->PostEvent(ftxui::Event::Custom);
     };
-    request_git_refresh = [&git] { git.request(); };
+    hooks.refresh_git = [&git] { git.request(); };
 
     // component that had the focus before command mode, given it back when
     // the command line closes.
@@ -258,7 +242,8 @@ int run_app(const AppOptions& options) {
         command_line_component,
     });
 
-    auto main_content = ftxui::Renderer(main_content_container, [&] {
+    static const char* const tab_names[] = {"", "File", "Edit", "View", "Settings", "Help"};
+    ftxui::Component main_content = ftxui::Renderer(main_content_container, [&] {
         if (status == 1) {
             // the "<-" button isn't drawn in this view: once it closed the menu
             // make the editor the active child, so keys go there instead of to
@@ -269,13 +254,17 @@ int run_app(const AppOptions& options) {
             }
             return tab_content->Render();
         }
+        const char* name = tab_names[std::clamp(tab_selected, 0, 5)];
         return ftxui::border(ftxui::vbox({
-            ftxui::hbox({file_back_button_container->Render(), ftxui::separator(), ftxui::bold(ftxui::text("Menu Options:"))}),
+            ftxui::hbox({ftxui::text(" "), file_back_button_container->Render(), ftxui::text(" "), ftxui::separator(),
+                         ftxui::text("  "), ftxui::bold(ftxui::text(name)),
+                         ftxui::filler()}),
             ftxui::separator(),
             ftxui::flex(tab_content->Render()),
             command_line_area(command_line_component),
         }));
     });
+    main_content = std::make_shared<KeepSideArrows>(main_content);
 
     ftxui::Component body_split = main_content;
     if (has_explorer) {
@@ -297,33 +286,27 @@ int run_app(const AppOptions& options) {
 
     auto constrained_split = ftxui::CatchEvent(body_split, [&](ftxui::Event event) {
         // the mouse wheel goes to what is under the pointer: the explorer
-        // scrolls itself, everything else is the editor (or a menu).
+        // scrolls itself, a window scrolls its own text, a menu its rows.
         if (event.is_mouse()) {
             const ftxui::Mouse mouse = event.mouse();
             const bool over_explorer = has_explorer && explorer.contains(mouse.x, mouse.y);
             const bool wheel = mouse.button == ftxui::Mouse::WheelUp || mouse.button == ftxui::Mouse::WheelDown;
-            if (!over_explorer && wheel) {
+            if (!over_explorer && wheel && status == 1) {
+                // the window gets it directly: FTXUI containers ignore keys
+                // while they are not focused.
                 const int rows = mouse.button == ftxui::Mouse::WheelUp ? -get_mouse_sensitivity() : get_mouse_sensitivity();
-                if (status == 1) {
-                    // the editor gets it directly: FTXUI containers ignore keys
-                    // while they are not focused.
-                    if (main_view_page == EDITOR_PAGE) {
-                        editor->wheel(rows);
-                    }
-                    return true;
-                }
-                const ftxui::Event arrow = rows < 0 ? ftxui::Event::ArrowUp : ftxui::Event::ArrowDown;
-                for (int i = 0; i < std::abs(rows); i++) {
-                    main_content->OnEvent(arrow);
-                }
+                windows->wheel(mouse.x, mouse.y, rows);
                 return true;
             }
+            // over a menu page: the page scrolls itself (ui/widgets.cpp).
         }
 
         const bool handled = body_split->OnEvent(event);
-        constexpr int min_left_width = 25;
-        constexpr int max_left_width = 100;
-        left_panel_width = std::clamp(left_panel_width, min_left_width, max_left_width);
+        left_panel_width = std::clamp(left_panel_width, min_explorer_width, max_explorer_width);
+        // kept for the next run, once the drag is over (not on every step of it).
+        if (!event.is_mouse() || event.mouse().motion == ftxui::Mouse::Released) {
+            settings.explorer_width = left_panel_width;
+        }
         return handled;
     });
 
@@ -331,27 +314,45 @@ int run_app(const AppOptions& options) {
     auto main_container = ftxui::Container::Vertical({top_bar_component, constrained_split});
 
     // --- hooks for the editor layer, which doesn't know about FTXUI ---
-    request_redraw = [] { screen->PostEvent(ftxui::Event::Custom); };
-    request_quit = [] { screen->ExitLoopClosure()(); };
+    hooks.redraw = [] { screen->PostEvent(ftxui::Event::Custom); };
+    hooks.quit = [] { screen->ExitLoopClosure()(); };
 
     // the folder new files go to (see editor/state.hpp): the explorer's
     // selected folder, or the folder of its selected file; else the open
     // file's folder; else the folder Itahi opened.
-    active_folder = [] {
-        if (!explorer_selected_path.empty()) {
-            return explorer_selected_is_folder ? explorer_selected_path
-                                               : fs::path(explorer_selected_path).parent_path().string();
+    hooks.active_folder = [&] {
+        const std::string selected = has_explorer ? explorer.selected_path() : std::string();
+        if (!selected.empty()) {
+            return explorer.selected_is_folder() ? selected : fs::path(selected).parent_path().string();
         }
         if (workspace.active()) {
             return fs::path(workspace.active()->path()).parent_path().string();
         }
         return workspace.root;
     };
+    // >rename and >rm without a path: the explorer's row, when the explorer
+    // had the focus (now, or when the command line opened).
+    hooks.command_target = [&] {
+        if (!has_explorer) {
+            return std::string();
+        }
+        const bool from_explorer = mode == Mode::Command ? focus_before_command_mode == explorer.rows : explorer.rows->Focused();
+        return from_explorer ? explorer.selected_path() : std::string();
+    };
 
     // opening a file (or a search) closes any menu and gives the editor the focus.
-    show_editor = [&] {
+    // (Also once the command line closes: a command typed from the explorer
+    // that opens a file leaves the focus in that file.)
+    hooks.show_editor = [&] {
         status = 1;
         tab_selected = 0;
+        focus_before_command_mode = tab_content;
+        tab_content->TakeFocus();
+    };
+    hooks.show_help = [&] {
+        status = 2;
+        tab_selected = 5;
+        focus_before_command_mode = tab_content;
         tab_content->TakeFocus();
     };
 
@@ -379,7 +380,7 @@ int run_app(const AppOptions& options) {
         top_bar_component,
         has_explorer ? explorer.rows : nullptr,
         tab_content,
-        editor,
+        windows,
         start_command_line,
     });
 
@@ -399,7 +400,7 @@ int run_app(const AppOptions& options) {
         }));
     });
 
-    ftxui::Component listener = key_listener_function(*screen, document, [editor] { return editor->copy_selection(); });
+    ftxui::Component listener = key_listener_function(*screen, document, [windows] { return windows->active_editor().copy_selection(); });
 
     // a setting changed (View or Settings tab): write the config file.
     ftxui::Component app = std::make_shared<AfterEvents>(listener, [&options] {
@@ -409,23 +410,77 @@ int run_app(const AppOptions& options) {
         }
     });
 
-    // single file mode has no explorer: start in the editor, not on the top bar.
-    if (options.single_file) {
+    // start where the work is: in the file when one was given, else on the
+    // explorer's first row (not on the menu bar).
+    if (options.single_file || !explorer.rows->Focusable()) {
         tab_content->TakeFocus();
+    } else {
+        explorer.rows->TakeFocus();
     }
 
+    // unsaved changes kept from a run that ended badly: say so on the first frame.
+    if (command_error.empty()) {
+        const std::string root = absolute_normal(workspace.root);
+        int kept = 0;
+        for (const RecoveryCopy& copy : recovery_copies()) {
+            kept += copy.path.compare(0, root.size() + 1, root + "/") == 0 ? 1 : 0;
+        }
+        if (kept > 0) {
+            command_output = "Unsaved changes of " + std::to_string(kept) + (kept == 1 ? " file" : " files") +
+                             " were kept from last time: >recover brings them back, >recover! forgets them";
+        }
+    }
+
+    // what other programs change, and the work done once a second, are
+    // handed to this thread: the watcher has its own.
+    watcher = std::make_unique<FileWatcher>(
+        [&] {
+            screen->Post([&] {
+                if (has_explorer) {
+                    explorer.refresh();
+                }
+                git.request();
+                const std::string changed = check_files_on_disk();
+                if (!changed.empty()) {
+                    command_output = changed;
+                }
+                watch_folders();
+                screen->PostEvent(ftxui::Event::Custom);
+            });
+        },
+        [&] {
+            screen->Post([&] {
+                // files on disks that tell nothing (network folders) are looked at too.
+                const std::string changed = check_files_on_disk();
+                const std::string problem = update_recovery_copies();
+                if (!changed.empty()) {
+                    command_output = changed;
+                }
+                if (!problem.empty()) {
+                    command_error = problem;
+                }
+                watch_folders();
+                if (!changed.empty() || !problem.empty()) {
+                    screen->PostEvent(ftxui::Event::Custom);
+                }
+            });
+        });
+    watch_folders();
+
     git.request();
+    std::signal(SIGTERM, keep_changes_then_end);
+    std::signal(SIGHUP, keep_changes_then_end);
     std::cout << "\x1b[?2004h" << std::flush;  // bracketed paste on
     screen->Loop(app);
     std::cout << "\x1b[?2004l" << std::flush;  // and off again
+    watcher.reset();  // its thread posts to the screen: gone before the screen is
+
+    std::signal(SIGTERM, SIG_DFL);
+    std::signal(SIGHUP, SIG_DFL);
 
     // the hooks point into this function: nothing may call them any more.
-    request_redraw = nullptr;
-    request_quit = nullptr;
-    show_editor = nullptr;
-    request_explorer_refresh = nullptr;
-    request_git_refresh = nullptr;
-    active_folder = nullptr;
+    hooks = Hooks{};
     open_command_line = nullptr;
+    screen = nullptr;
     return 0;
 }

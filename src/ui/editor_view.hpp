@@ -17,12 +17,17 @@
 
 class Document;
 
-// the editor's text area. It draws the active document itself, only the
+// the text area of one window. It draws the window's document itself, only the
 // rows on screen (with tabs expanded, syntax colors, search matches, the
 // selection and the cursor's row marked), and handles the keys and the mouse:
 // Itahi's modes, vim motions, editing, selection and the clipboard.
 class EditorView : public ftxui::ComponentBase {
 public:
+    // the view of the window `window` (see Workspace): it shows that window's
+    // document, with the window's own cursor, selection and scroll position.
+    explicit EditorView(int window = 0) : window_(window) {}
+    int window() const { return window_; }
+
     ftxui::Element OnRender() override;
     bool OnEvent(ftxui::Event event) override;
     bool Focusable() const override { return true; }
@@ -36,7 +41,7 @@ public:
     // or the cursor ("Keep cursor centered") by `rows`.
     void wheel(int rows);
 
-    // the Edit tab's buttons, on the active document.
+    // the Edit tab's buttons, on this window's document.
     void cut();
     void copy();
     void paste_clipboard();
@@ -61,6 +66,16 @@ private:
         std::vector<int> widths;
         std::size_t end_byte;  // where a click past the last glyph goes
     };
+
+    struct Frame;  // what one frame needs while it is painted
+
+    Document* document() const;
+    void paint_line_number(const Frame& frame, int y, std::size_t line, bool first_row);
+    void paint_glyphs(const Frame& frame, int y, const std::vector<GlyphCell>& glyphs, std::size_t first, std::size_t end,
+                      int origin, DrawnRow& drawn);
+    void paint_cursor(const Frame& frame, int y, const std::vector<GlyphCell>& glyphs, std::size_t first, std::size_t end,
+                      int origin, bool last_row, std::size_t content_end);
+    void paint_scroll(const Frame& frame, const ftxui::Box& box, int bar_x);
 
     bool on_mouse(ftxui::Event event);
     bool on_key(Document& document, const ftxui::Event& event);
@@ -91,6 +106,8 @@ private:
     void cut_selection(Document& document);
     void paste(Document& document);
 
+    int window_;
+
     // drawn in the last frame
     std::vector<DrawnRow> drawn_;
     ftxui::Box box_;
@@ -100,13 +117,13 @@ private:
     int wrap_width_ = 79;
 
     // the cursor as seen by the last frame: when it moved, the view follows it.
-    const Document* seen_document_ = nullptr;
+    std::uint64_t seen_document_ = 0;  // Document::id()
     std::size_t seen_cursor_ = 0;
     std::uint64_t seen_version_ = 0;
 
     // Up / Down keep the column they started from (a "sticky" column).
     int goal_column_ = -1;
-    const Document* goal_document_ = nullptr;
+    std::uint64_t goal_document_ = 0;
     std::size_t goal_cursor_ = 0;
 
     // Normal mode "v": the cursor moves extend the selection.
@@ -119,10 +136,10 @@ private:
 
     // the glyphs of the lines laid out lately (a deque: references to them
     // stay valid while more are added).
-    const Document* cache_document_ = nullptr;
+    std::uint64_t cache_document_ = 0;
     std::uint64_t cache_version_ = UINT64_MAX;
     int cache_tab_ = 0;
     std::deque<std::pair<std::size_t, std::vector<GlyphCell>>> line_cache_;
 };
 
-std::shared_ptr<EditorView> make_editor_view();
+std::shared_ptr<EditorView> make_editor_view(int window = 0);

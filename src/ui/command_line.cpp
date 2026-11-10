@@ -8,9 +8,41 @@
 #include "editor/commands.hpp"
 #include "editor/paths.hpp"
 #include "editor/search.hpp"
+#include "editor/settings.hpp"
 #include "editor/state.hpp"
+#include "editor/workspace.hpp"
 
 std::function<void(const std::string&)> open_command_line;
+
+namespace {
+
+    // the commands whose argument is a path: Tab completes it.
+    const char* const path_commands[] = {">e ", ">w! ", ">w ", ">vsplit ", ">vs ", ">split ", ">sp ",
+                                         ">mkdir ", ">rename ", ">mv ", ">rm! ", ">rm "};
+
+    // where the path starts in `line`, npos when its command takes none.
+    std::size_t path_start(const std::string& line) {
+        for (const char* prefix : path_commands) {
+            if (line.rfind(prefix, 0) == 0) {
+                const std::size_t first = line.find_first_not_of(' ', std::string(prefix).size());
+                return first == std::string::npos ? line.size() : first;
+            }
+        }
+        return std::string::npos;
+    }
+
+    // what >rename and >rm act on when no path is typed.
+    std::string target_name() {
+        const std::string selected = hooks.command_target ? hooks.command_target() : std::string();
+        const std::string target = selected.empty() ? active_path() : selected;
+        return target.empty() ? "nothing (no file is open)" : target;
+    }
+
+    // which command of the history is shown (its size: none, a new line).
+    std::size_t history_at = 0;
+    std::string history_draft;  // what was typed before Up was pressed
+
+}  // namespace
 
 ftxui::Element command_line_area(const ftxui::Component& input) {
     auto error_line = [] {
@@ -28,22 +60,33 @@ ftxui::Element command_line_area(const ftxui::Component& input) {
     }
 
     ftxui::Element line = input->Render();
-    // >e / >w with a plain name: show the folder it will go to.
-    for (const char* prefix : {">e ", ">w! ", ">w "}) {
-        if (command_line.rfind(prefix, 0) == 0) {
-            const std::string name = command_line.substr(std::string(prefix).size());
+    const auto hint = [&line](const std::string& text) {
+        line = ftxui::hbox({line | ftxui::flex, ftxui::dim(ftxui::text(" " + text + " "))});
+    };
+    // a command that makes or opens a file, with a plain name: show the
+    // folder it will go to.
+    if (const std::size_t start = path_start(command_line); start != std::string::npos) {
+        const std::string name = command_line.substr(start);
+        const bool renames = command_line.rfind(">rename ", 0) == 0 || command_line.rfind(">mv ", 0) == 0;
+        const bool removes = command_line.rfind(">rm", 0) == 0;
+        if (renames) {
+            hint("renames " + target_name() + "  Enter: rename  Esc: cancel");
+        } else if (removes) {
+            hint(std::string(command_line.rfind(">rm!", 0) == 0 ? "deletes " : "moves ") + (name.empty() ? target_name() : name) +
+                 (command_line.rfind(">rm!", 0) == 0 ? " for good" : " to the trash") + "  Enter: confirm  Esc: cancel");
+        } else if (!name.empty() && name.back() != '/') {
             // the folder the file will really be in, for what is typed now.
-            if (!name.empty() && name.back() != '/') {
-                std::string folder = resolve_user_path(name).parent_path().lexically_normal().string();
-                if (folder.empty() || folder == ".") {
-                    folder = "the opened folder";
-                } else if (folder.back() != '/') {
-                    folder += '/';
-                }
-                line = ftxui::hbox({line | ftxui::flex, ftxui::dim(ftxui::text(" in " + folder + "  Tab: complete  Enter: create / open "))});
+            std::string folder = resolve_user_path(name).parent_path().lexically_normal().string();
+            if (folder.empty() || folder == ".") {
+                folder = "the opened folder";
+            } else if (folder.back() != '/') {
+                folder += '/';
             }
-            break;
+            hint("in " + folder + "  Tab: complete  Enter: create / open");
         }
+    } else if (command_line == ">rm" || command_line == ">rm!") {
+        hint(std::string(command_line == ">rm!" ? "deletes " : "moves ") + target_name() +
+             (command_line == ">rm!" ? " for good" : " to the trash") + "  Enter: confirm  Esc: cancel");
     }
 
     // a search shows where it is: "2 of 5", like vscode.
@@ -52,7 +95,8 @@ ftxui::Element command_line_area(const ftxui::Component& input) {
         const std::string count = search.matches.empty() ? "No results"
             : search.current < 0 ? std::to_string(search.matches.size()) + (search.matches.size() == 1 ? " match" : " matches")
             : std::to_string(search.current + 1) + " of " + std::to_string(search.matches.size());
-        line = ftxui::hbox({line | ftxui::flex, ftxui::dim(ftxui::text(" " + count + "  Enter/Down: next  Up: previous  Esc: close "))});
+        const std::string options = std::string(search.ignore_case ? "  [any case]" : "") + (search.whole_word ? "  [whole words]" : "");
+        hint(count + options + "  Enter/Down: next  Up: previous  Alt+C: case  Alt+W: words  Esc: close");
     }
 
     // Tab's options: on a gray strip under the command line, every name,
@@ -73,18 +117,25 @@ ftxui::Element command_line_area(const ftxui::Component& input) {
 }
 
 std::string command_line_ghost() {
-    // only at the end of ">e" or ">e " (no file name typed yet).
+    // only at the end of a command that makes a file or a folder, before any
+    // name is typed.
     if (command_cursor_index != static_cast<int>(command_line.size())) {
         return "";
     }
-    if (command_line != ">e" && command_line != ">e ") {
-        return "";
+    for (const char* command : {">e", ">mkdir", ">vsplit", ">vs", ">split", ">sp"}) {
+        const std::string name = command;
+        // ">e" alone, or with its space: the split commands only with the
+        // space (alone they split without a file).
+        const bool alone_too = name == ">e" || name == ">mkdir";
+        if (command_line == name + " " || (alone_too && command_line == name)) {
+            const std::string folder = active_folder_for_command();
+            if (folder.empty()) {
+                return "";
+            }
+            return command_line == name ? " " + folder : folder;
+        }
     }
-    const std::string folder = active_folder_for_command();
-    if (folder.empty()) {
-        return "";
-    }
-    return command_line == ">e" ? " " + folder : folder;
+    return "";
 }
 
 ftxui::Component command_line_input(std::function<void()> on_leave) {
@@ -123,7 +174,33 @@ ftxui::Component command_line_input(std::function<void()> on_leave) {
         }
 
         if (event == ftxui::Event::Escape) {
+            history_at = command_history.size();
             leave();
+            return true;
+        }
+
+        // while searching: Alt+C matches any case, Alt+W whole words only.
+        if (is_search() && (event == ftxui::Event::AltC || event == ftxui::Event::AltW)) {
+            bool& toggled = event == ftxui::Event::AltC ? settings.search_ignore_case : settings.search_whole_word;
+            toggled = !toggled;
+            search_preview(command_line.substr(2), command_line[1] == '?');
+            return true;
+        }
+
+        // Up / Down: the commands run before, like a shell.
+        if (!is_search() && (event == ftxui::Event::ArrowUp || event == ftxui::Event::ArrowDown)) {
+            history_at = std::min(history_at, command_history.size());
+            if (event == ftxui::Event::ArrowUp && history_at > 0) {
+                if (history_at == command_history.size()) {
+                    history_draft = command_line;
+                }
+                command_line = ">" + command_history[--history_at];
+            } else if (event == ftxui::Event::ArrowDown && history_at < command_history.size()) {
+                ++history_at;
+                command_line = history_at == command_history.size() ? history_draft : ">" + command_history[history_at];
+            }
+            command_cursor_index = static_cast<int>(command_line.size());
+            command_completions.clear();
             return true;
         }
 
@@ -137,22 +214,14 @@ ftxui::Component command_line_input(std::function<void()> on_leave) {
             return true;
         }
 
-        // Tab completes the file name of >e, >w and >w!, like a shell's cd.
+        // Tab completes the file name of the commands that take one, like a shell's cd.
         if (event == ftxui::Event::Tab) {
-            std::size_t start = std::string::npos;
-            for (const char* prefix : {">e ", ">w! ", ">w "}) {
-                if (command_line.rfind(prefix, 0) == 0) {
-                    start = std::string(prefix).size();
-                    break;
-                }
-            }
+            const std::size_t start = path_start(command_line);
             if (start == std::string::npos) {
                 return true;  // nothing to complete
             }
-            const std::size_t first = command_line.find_first_not_of(' ', start);
-            const std::size_t path_start = first == std::string::npos ? command_line.size() : first;
-            const PathCompletion completion = complete_path(command_line.substr(path_start));
-            command_line = command_line.substr(0, path_start) + completion.text;
+            const PathCompletion completion = complete_path(command_line.substr(start));
+            command_line = command_line.substr(0, start) + completion.text;
             command_cursor_index = static_cast<int>(command_line.size());
             command_completions = completion.options;
             return true;
@@ -172,6 +241,8 @@ ftxui::Component command_line_input(std::function<void()> on_leave) {
         }
 
         if (event == ftxui::Event::Return) {
+            remember_command(command_line.substr(1));
+            history_at = command_history.size();
             const CommandResult result = run_command(command_line.substr(1)); // without the '>' prompt
 
             // an invalid or refused command keeps the command line open, with

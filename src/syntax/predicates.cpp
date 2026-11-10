@@ -199,7 +199,11 @@ bool predicates_pass(const std::vector<Predicate>& predicates, const TSQueryMatc
             result = p.compare_with_capture ? capture_node(match, p.other_capture_id, other) && node_text(other, source) == text
                                             : text == p.value;
         } else if (p.kind == PredicateKind::Match) {
-            result = p.regex && std::regex_search(text.begin(), text.end(), *p.regex);
+            // a pattern can need a step for every character it matches, taken
+            // on the stack by some standard libraries: a token of a megabyte
+            // (a minified file) must not be able to crash the editor.
+            constexpr std::size_t longest_token = 4096;
+            result = p.regex && text.size() <= longest_token && std::regex_search(text.begin(), text.end(), *p.regex);
         } else if (p.kind == PredicateKind::AnyOf) {
             result = std::find(p.values.begin(), p.values.end(), text) != p.values.end();
         } else if (p.kind == PredicateKind::HasParent) {

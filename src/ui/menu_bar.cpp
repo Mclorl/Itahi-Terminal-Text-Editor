@@ -28,7 +28,7 @@ ftxui::Component make_top_bar() {
                               : mode == Mode::Edit   ? "   -- EDIT --"
                                                      : "-- COMMAND --";
         return ftxui::hbox({
-            ftxui::flex(menu_bar_container->Render()),
+            ftxui::flex(ftxui::hbox({ftxui::text(" "), menu_bar_container->Render()})),
             ftxui::flex(ftxui::center(ftxui::bold(file_name))),
             ftxui::flex(ftxui::hbox({ftxui::separatorEmpty()})),
             // in the editor the status bar shows the mode; in the menus, here.

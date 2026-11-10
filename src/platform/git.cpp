@@ -1,7 +1,9 @@
 #include "platform/git.hpp"
 
 #include <filesystem>
+#include <initializer_list>
 #include <system_error>
+#include <vector>
 
 #include "platform/process.hpp"
 
@@ -114,7 +116,21 @@ GitStatus parse_git_status(std::string_view porcelain, const std::string& top_le
 }
 
 GitStatus read_git_status(const std::string& folder) {
-    const ProcessResult top = run_process({"git", "-C", folder, "rev-parse", "--show-toplevel"});
+    // git is run for whatever folder was opened, which may be someone else's
+    // repository: nothing in its settings may run a program on the way.
+    //   core.fsmonitor=false   a repository can name a program to run on
+    //                          every `git status`
+    //   --no-optional-locks    only look: the index isn't rewritten, so this
+    //                          never gets in the way of a git command the
+    //                          user is running (or wakes the file watcher)
+    const std::vector<std::string> git = {"git", "-c", "core.fsmonitor=false", "--no-optional-locks", "-C", folder};
+    const auto with = [&git](std::initializer_list<const char*> arguments) {
+        std::vector<std::string> command = git;
+        command.insert(command.end(), arguments.begin(), arguments.end());
+        return command;
+    };
+
+    const ProcessResult top = run_process(with({"rev-parse", "--show-toplevel"}));
     if (!top.started || top.exit_code != 0 || top.output.empty()) {
         return {};
     }
@@ -123,12 +139,13 @@ GitStatus read_git_status(const std::string& folder) {
         top_level.pop_back();
     }
     const ProcessResult result = run_process(
-        {"git", "-C", folder, "status", "--porcelain=v1", "-z", "--branch", "--ignored", "--untracked-files=normal"},
-        "", true, 4000);
+        with({"status", "--porcelain=v1", "-z", "--branch", "--ignored", "--untracked-files=normal"}), "", true, 4000);
     if (!result.started || result.exit_code != 0) {
         return {};
     }
-    return parse_git_status(result.output, top_level);
+    GitStatus status = parse_git_status(result.output, top_level);
+    status.top_level = top_level;
+    return status;
 }
 
 char GitStatus::state_of(const std::string& path) const {

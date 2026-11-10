@@ -94,8 +94,8 @@ namespace {
 
 }  // namespace
 
-std::shared_ptr<EditorView> make_editor_view() {
-    return std::make_shared<EditorView>();
+std::shared_ptr<EditorView> make_editor_view(int window) {
+    return std::make_shared<EditorView>(window);
 }
 
 ftxui::Element EditorView::OnRender() {
@@ -106,9 +106,9 @@ ftxui::Element EditorView::OnRender() {
 
 const std::vector<GlyphCell>& EditorView::glyphs_of(const Document& document, std::size_t line) {
     const int tab = get_tab_size();
-    if (cache_document_ != &document || cache_version_ != document.version() || cache_tab_ != tab) {
+    if (cache_document_ != document.id() || cache_version_ != document.version() || cache_tab_ != tab) {
         line_cache_.clear();
-        cache_document_ = &document;
+        cache_document_ = document.id();
         cache_version_ = document.version();
         cache_tab_ = tab;
     }
@@ -335,35 +335,173 @@ void EditorView::scroll_view(Document& document, int rows) {
 }
 
 void EditorView::wheel(int rows) {
-    Document* document = workspace.active();
+    Document* document = this->document();
     if (!document || document->hidden_as_binary()) {
         return;
     }
+    const ViewScope scope(*document, window_);  // the wheel also scrolls a window without the focus
     if (settings.scroll_style == SCROLL_FREELY) {
         scroll_view(*document, rows);  // the cursor stays where it is, even off screen
     } else {
         move_vertically(*document, rows, visual_);
     }
-    if (request_redraw) {
-        request_redraw();
-    }
+    call(hooks.redraw);
 }
 
 // --- drawing -------------------------------------------------------------
 
+struct EditorView::Frame {
+    ftxui::Screen& screen;
+    Document& document;
+    const Theme& theme;
+    const HighlightCache::Colored* colors;  // nullptr: plain text
+    bool focused;       // the terminal's cursor is drawn here
+    bool ghost_cursor;  // without the focus: a mark where the cursor is
+    int x_min;          // first column of the view
+    int gutter;         // columns of the line numbers (0: none)
+    int text_x;         // first column of the text
+    int right;          // first column past the text
+    std::size_t cursor;
+    std::size_t cursor_line;
+    std::size_t selection_begin;
+    std::size_t selection_end;
+};
+
+Document* EditorView::document() const {
+    return workspace.document_of(window_);
+}
+
+// the line number, on the line's first row.
+void EditorView::paint_line_number(const Frame& frame, int y, std::size_t line, bool first_row) {
+    const bool on_cursor_line = line == frame.cursor_line;
+    const std::string number = first_row ? std::to_string(line + 1) : "";
+    for (int x = frame.x_min; x < frame.x_min + frame.gutter; ++x) {
+        const int digit = x - (frame.x_min + frame.gutter - static_cast<int>(number.size()));
+        ftxui::Cell& cell = frame.screen.CellAt(x, y);
+        cell.character = digit >= 0 ? std::string(1, number[static_cast<std::size_t>(digit)]) : " ";
+        if (on_cursor_line) {
+            cell.bold = true;
+            cell.foreground_color = frame.theme.accent;
+        } else {
+            cell.dim = true;
+        }
+    }
+    if (on_cursor_line && first_row && settings.underline_active_row_on_numbers) {
+        const int mark = settings.active_row_mark == ROW_MARK_SHADED ? ROW_MARK_SHADED : ROW_MARK_TEXT_COLOR;
+        for (int x = frame.x_min; x < frame.x_min + frame.gutter; ++x) {
+            mark_active_row_cell(frame.screen, x, y, frame.x_min, mark, frame.theme.shade);
+        }
+    }
+}
+
+// the glyphs [first, end) of a line on row `y`: the character, its syntax
+// color, then a search match, then the selection over both.
+void EditorView::paint_glyphs(const Frame& frame, int y, const std::vector<GlyphCell>& glyphs, std::size_t first,
+                              std::size_t end, int origin, DrawnRow& drawn) {
+    const std::string& text = frame.document.text();
+    for (std::size_t g = first; g < end; ++g) {
+        const GlyphCell& glyph = glyphs[g];
+        const int x = frame.text_x + glyph.column - origin;
+        if (glyph.width == 0 || x + glyph.width <= frame.text_x) {
+            continue;  // not drawn, or left of the view
+        }
+        if (x >= frame.right) {
+            break;
+        }
+        ftxui::Color foreground = frame.colors ? group_color(frame.colors->group_at(glyph.byte)) : ftxui::Color::Default;
+        ftxui::Color background = ftxui::Color::Default;
+        if (const int kind = search_match_kind(frame.document, glyph.byte)) {
+            background = kind == 2 ? search_current_background : search_match_background;
+            foreground = search_match_foreground;
+        }
+        if (glyph.byte >= frame.selection_begin && glyph.byte < frame.selection_end) {
+            background = frame.theme.selection;
+        }
+        // a tab is blank cells; a wide glyph cut by the edge too.
+        const bool whole = x >= frame.text_x && x + glyph.width <= frame.right && text[glyph.byte] != '\t';
+        for (int k = 0; k < glyph.width; ++k) {
+            if (x + k < frame.text_x || x + k >= frame.right) {
+                continue;
+            }
+            ftxui::Cell& cell = frame.screen.CellAt(x + k, y);
+            if (!whole) {
+                cell.character = " ";
+            } else if (k == 0) {
+                cell.character = glyph.invalid ? std::string("\xEF\xBF\xBD") : text.substr(glyph.byte, glyph.size);
+            } else {
+                cell.character = "";  // 2nd cell of a full-width glyph
+            }
+            cell.foreground_color = foreground;
+            cell.background_color = background;
+        }
+        drawn.cells.emplace_back(glyph.byte, x);
+        drawn.widths.push_back(glyph.width);
+    }
+}
+
+// the cursor: the terminal's own (a block in Normal mode, a bar in Edit mode)
+// in the window that has the focus, an inverted cell in the others.
+void EditorView::paint_cursor(const Frame& frame, int y, const std::vector<GlyphCell>& glyphs, std::size_t first,
+                              std::size_t end, int origin, bool last_row, std::size_t content_end) {
+    int x = -1;
+    if (frame.cursor < content_end) {
+        for (std::size_t g = first; g < end; ++g) {
+            if (glyphs[g].byte <= frame.cursor && frame.cursor < glyphs[g].byte + glyphs[g].size) {
+                x = frame.text_x + glyphs[g].column - origin;
+                break;
+            }
+        }
+    } else if (last_row) {
+        x = frame.text_x + line_width(glyphs) - origin;
+    }
+    if (x < frame.text_x || x >= frame.right) {
+        return;
+    }
+    if (frame.focused) {
+        const auto shape = mode == Mode::Edit ? ftxui::Screen::Cursor::BarBlinking : ftxui::Screen::Cursor::Block;
+        frame.screen.SetCursor({x, y, shape});
+    } else if (frame.ghost_cursor) {
+        frame.screen.CellAt(x, y).inverted = true;
+    }
+}
+
+// the scroll bar. With word wrap the rows of the lines off screen are
+// estimated from their length: exact would mean wrapping the whole file.
+void EditorView::paint_scroll(const Frame& frame, const ftxui::Box& box, int bar_x) {
+    const Document& document = frame.document;
+    const Document::ViewPosition& view = document.view;
+    const std::size_t lines = document.line_count();
+    int total = static_cast<int>(lines);
+    int top = static_cast<int>(view.top_line);
+    if (settings.word_wrap) {
+        const std::vector<std::size_t>& starts = document.line_starts();
+        const std::size_t width = static_cast<std::size_t>(wrap_width_);
+        total = 0;
+        for (std::size_t line = 0; line < lines; ++line) {
+            if (line == view.top_line) {
+                top = total + view.top_row;
+            }
+            const std::size_t length = (line + 1 < lines ? starts[line + 1] - 1 : document.text().size()) - starts[line];
+            total += static_cast<int>(std::max<std::size_t>(1, (length + width - 1) / width));
+        }
+    }
+    paint_scroll_bar(frame.screen, bar_x, box.y_min, box.y_max, top, total);
+}
+
 void EditorView::paint(ftxui::Screen& screen, const ftxui::Box& box, bool focused) {
     drawn_.clear();
     box_ = box;
-    Document* document = workspace.active();
+    Document* document = this->document();
     if (!document || box.x_max < box.x_min || box.y_max < box.y_min) {
         return;
     }
+    // this window's own cursor, selection and scroll position.
+    const ViewScope scope(*document, window_);
     if (line_cache_.size() > 512) {
         line_cache_.clear();
     }
     const std::string& text = document->text();
     const std::size_t lines = document->line_count();
-    const Theme& theme = current_theme();
     const bool wrap = settings.word_wrap;
 
     // [line numbers][space][text ...][scroll bar]
@@ -377,39 +515,44 @@ void EditorView::paint(ftxui::Screen& screen, const ftxui::Box& box, bool focuse
     text_columns_ = bar_x - text_x;
     view_rows_ = box.y_max - box.y_min + 1;
     wrap_width_ = std::max(1, text_columns_ - 1);  // one column for the cursor after a full row
-    const int right = text_x + text_columns_;      // the first column past the text
 
-    const bool moved = seen_document_ != document || seen_cursor_ != document->cursor() ||
-                       seen_version_ != document->version();
-    seen_document_ = document;
+    // the view follows the cursor when it moved. In a window that isn't the
+    // active one, an edit made elsewhere is not a move: it keeps showing
+    // what it showed.
+    const bool active = workspace.active_window() == window_;
+    const bool cursor_changed = seen_cursor_ != document->cursor();
+    const bool version_changed = seen_version_ != document->version();
+    const bool moved = seen_document_ != document->id() ||
+                       (active ? cursor_changed || version_changed : cursor_changed && !version_changed);
+    seen_document_ = document->id();
     seen_cursor_ = document->cursor();
     seen_version_ = document->version();
     scroll_into_view(*document, moved);
     const Document::ViewPosition& view = document->view;
 
-    const std::size_t cursor = document->cursor();
-    const std::size_t cursor_line = document->line_of(cursor);
-    const auto [selection_begin, selection_end] = document->selection();
-
     // syntax colors, for the part on screen only.
-    HighlightCache* colors = nullptr;
+    const HighlightCache::Colored* colors = nullptr;
     if (settings.syntax_highlighting && !text.empty()) {
-        colors = &highlights_for(text, document->path(), document->version());
-        if (colors->language_index < 0) {
-            colors = nullptr;
-        } else {
+        HighlightCache& cache = highlights_for(text, document->path(), document->id(), document->version(),
+            [document](std::uint64_t since, std::vector<TextEdit>& out) { return document->edits_since(since, out); });
+        if (cache.tree) {
             const std::size_t after = std::min(lines, view.top_line + static_cast<std::size_t>(view_rows_) + 1);
-            ensure_colored(*colors, document->line_start(view.top_line), after < lines ? document->line_start(after) : text.size());
+            colors = &colored_part(cache, text, document->line_start(view.top_line), after < lines ? document->line_start(after) : text.size());
         }
     }
 
-    const auto shape = mode == Mode::Edit ? ftxui::Screen::Cursor::BarBlinking : ftxui::Screen::Cursor::Block;
+    const auto [selection_begin, selection_end] = document->selection();
+    const Frame frame{screen, *document, current_theme(), colors, focused,
+                      !focused && workspace.window_count() > 1,
+                      box.x_min, gutter, text_x, text_x + text_columns_,
+                      document->cursor(), document->line_of(document->cursor()), selection_begin, selection_end};
+
     int y = box.y_min;
     for (std::size_t line = view.top_line; line < lines && y <= box.y_max; ++line) {
         const std::vector<GlyphCell>& glyphs = glyphs_of(*document, line);
         const std::size_t content_end = document->line_content_end(line);
         const std::vector<std::size_t> rows = wrap ? wrap_rows(glyphs, text, wrap_width_) : std::vector<std::size_t>{0};
-        const bool on_cursor_line = line == cursor_line;
+        const bool on_cursor_line = line == frame.cursor_line;
         std::size_t r = line == view.top_line ? std::min(static_cast<std::size_t>(view.top_row), rows.size() - 1) : 0;
 
         for (; r < rows.size() && y <= box.y_max; ++r, ++y) {
@@ -419,129 +562,42 @@ void EditorView::paint(ftxui::Screen& screen, const ftxui::Box& box, bool focuse
             // the column drawn at text_x: the row's first glyph, or the scroll offset.
             const int origin = wrap ? (first < glyphs.size() ? glyphs[first].column : line_width(glyphs)) : view.left;
 
-            // the line number, on the line's first row.
             if (gutter > 0) {
-                const std::string number = r == 0 ? std::to_string(line + 1) : "";
-                for (int x = box.x_min; x < box.x_min + gutter; ++x) {
-                    const int digit = x - (box.x_min + gutter - static_cast<int>(number.size()));
-                    ftxui::Cell& cell = screen.CellAt(x, y);
-                    cell.character = digit >= 0 ? std::string(1, number[static_cast<std::size_t>(digit)]) : " ";
-                    if (on_cursor_line) {
-                        cell.bold = true;
-                        cell.foreground_color = theme.accent;
-                    } else {
-                        cell.dim = true;
-                    }
-                }
-                if (on_cursor_line && r == 0 && settings.underline_active_row_on_numbers) {
-                    const int mark = settings.active_row_mark == ROW_MARK_SHADED ? ROW_MARK_SHADED : ROW_MARK_TEXT_COLOR;
-                    for (int x = box.x_min; x < box.x_min + gutter; ++x) {
-                        mark_active_row_cell(screen, x, y, box.x_min, mark, theme.shade);
-                    }
-                }
+                paint_line_number(frame, y, line, r == 0);
             }
 
-            // the text, glyph by glyph.
             DrawnRow& drawn = drawn_.emplace_back();
             drawn.y = y;
-            for (std::size_t g = first; g < end; ++g) {
-                const GlyphCell& glyph = glyphs[g];
-                const int x = text_x + glyph.column - origin;
-                if (glyph.width == 0 || x + glyph.width <= text_x) {
-                    continue;  // not drawn, or left of the view
-                }
-                if (x >= right) {
-                    break;
-                }
-                ftxui::Color foreground = colors ? group_color(colors->byte_groups[glyph.byte]) : ftxui::Color::Default;
-                ftxui::Color background = ftxui::Color::Default;
-                if (const int kind = search_match_kind(glyph.byte)) {
-                    background = kind == 2 ? search_current_background : search_match_background;
-                    foreground = search_match_foreground;
-                }
-                if (glyph.byte >= selection_begin && glyph.byte < selection_end) {
-                    background = theme.selection;
-                }
-                // a tab is blank cells; a wide glyph cut by the edge too.
-                const bool whole = x >= text_x && x + glyph.width <= right && text[glyph.byte] != '\t';
-                for (int k = 0; k < glyph.width; ++k) {
-                    if (x + k < text_x || x + k >= right) {
-                        continue;
-                    }
-                    ftxui::Cell& cell = screen.CellAt(x + k, y);
-                    if (!whole) {
-                        cell.character = " ";
-                    } else if (k == 0) {
-                        cell.character = glyph.invalid ? std::string("\xEF\xBF\xBD") : text.substr(glyph.byte, glyph.size);
-                    } else {
-                        cell.character = "";  // 2nd cell of a full-width glyph
-                    }
-                    cell.foreground_color = foreground;
-                    cell.background_color = background;
-                }
-                drawn.cells.emplace_back(glyph.byte, x);
-                drawn.widths.push_back(glyph.width);
-            }
+            paint_glyphs(frame, y, glyphs, first, end, origin, drawn);
             drawn.end_byte = last_row ? content_end : end > first ? glyphs[end - 1].byte : document->line_start(line);
 
             // a selected line break: one selected cell after the text.
             if (last_row && line + 1 < lines && selection_begin <= content_end && content_end < selection_end) {
                 const int x = text_x + line_width(glyphs) - origin;
-                if (x >= text_x && x < right) {
-                    screen.CellAt(x, y).background_color = theme.selection;
+                if (x >= text_x && x < frame.right) {
+                    screen.CellAt(x, y).background_color = frame.theme.selection;
                 }
             }
 
-            // the cursor: the terminal's own, a block in Normal mode and a bar in Edit mode.
-            if (focused && on_cursor_line) {
-                int x = -1;
-                if (cursor < content_end) {
-                    for (std::size_t g = first; g < end; ++g) {
-                        if (glyphs[g].byte <= cursor && cursor < glyphs[g].byte + glyphs[g].size) {
-                            x = text_x + glyphs[g].column - origin;
-                            break;
-                        }
+            if (on_cursor_line) {
+                paint_cursor(frame, y, glyphs, first, end, origin, last_row, content_end);
+                // the cursor's row: underlined, or shaded (View tab).
+                if (settings.underline_active_row) {
+                    for (int x = text_x; x < frame.right; ++x) {
+                        mark_active_row_cell(screen, x, y, text_x, settings.active_row_mark, frame.theme.shade);
                     }
-                } else if (last_row) {
-                    x = text_x + line_width(glyphs) - origin;
-                }
-                if (x >= text_x && x < right) {
-                    screen.SetCursor({x, y, shape});
-                }
-            }
-
-            // the cursor's row: underlined, or shaded (View tab).
-            if (on_cursor_line && settings.underline_active_row) {
-                for (int x = text_x; x < right; ++x) {
-                    mark_active_row_cell(screen, x, y, text_x, settings.active_row_mark, theme.shade);
                 }
             }
         }
     }
-
-    // the scroll bar. With word wrap the rows of the lines off screen are
-    // estimated from their length: exact would mean wrapping the whole file.
-    int total = static_cast<int>(lines);
-    int top = static_cast<int>(view.top_line);
-    if (wrap) {
-        const std::vector<std::size_t>& starts = document->line_starts();
-        total = 0;
-        for (std::size_t line = 0; line < lines; ++line) {
-            if (line == view.top_line) {
-                top = total + view.top_row;
-            }
-            const std::size_t length = (line + 1 < lines ? starts[line + 1] - 1 : text.size()) - starts[line];
-            total += static_cast<int>(std::max<std::size_t>(1, (length + static_cast<std::size_t>(wrap_width_) - 1) / static_cast<std::size_t>(wrap_width_)));
-        }
-    }
-    paint_scroll_bar(screen, bar_x, box.y_min, box.y_max, top, total);
+    paint_scroll(frame, box, bar_x);
 }
 
 // --- mouse ---------------------------------------------------------------
 
 std::size_t EditorView::byte_at(int x, int y) const {
     if (drawn_.empty()) {
-        return workspace.active() ? workspace.active()->cursor() : 0;
+        return document() ? document()->cursor() : 0;
     }
     if (y > drawn_.back().y) {
         return drawn_.back().end_byte;  // below the text: its end
@@ -556,7 +612,7 @@ std::size_t EditorView::byte_at(int x, int y) const {
 }
 
 bool EditorView::on_mouse(ftxui::Event event) {
-    Document* document = workspace.active();
+    Document* document = this->document();
     if (!document || document->hidden_as_binary()) {
         return false;
     }
@@ -572,6 +628,7 @@ bool EditorView::on_mouse(ftxui::Event event) {
     }
     if ((mouse.button == ftxui::Mouse::WheelLeft || mouse.button == ftxui::Mouse::WheelRight) && inside) {
         if (!settings.word_wrap && settings.scroll_style == SCROLL_FREELY) {
+            const ViewScope scope(*document, window_);
             const int step = get_mouse_sensitivity();
             document->view.left = std::max(0, document->view.left + (mouse.button == ftxui::Mouse::WheelLeft ? -step : step));
         }
@@ -582,6 +639,7 @@ bool EditorView::on_mouse(ftxui::Event event) {
         if (!inside) {
             return false;
         }
+        workspace.focus_window(window_);  // before its cursor is touched: the click is this window's
         TakeFocus();
         visual_ = false;
         const std::size_t byte = byte_at(mouse.x, mouse.y);
@@ -626,7 +684,7 @@ bool EditorView::OnEvent(ftxui::Event event) {
     if (event.is_mouse()) {
         return on_mouse(event);
     }
-    Document* document = workspace.active();
+    Document* document = this->document();
     if (!document || document->hidden_as_binary()) {
         return false;
     }
@@ -735,7 +793,7 @@ void EditorView::move(Document& document, Motion motion, bool extend) {
 
 void EditorView::move_vertically(Document& document, int rows, bool extend) {
     // the column to come back to is kept while only Up / Down move the cursor.
-    if (goal_document_ != &document || goal_cursor_ != document.cursor()) {
+    if (goal_document_ != document.id() || goal_cursor_ != document.cursor()) {
         goal_column_ = -1;
     }
     const RowPosition from = row_of(document, document.cursor());
@@ -753,7 +811,7 @@ void EditorView::move_vertically(Document& document, int rows, bool extend) {
     } else {
         document.set_cursor(byte_in_row(document, to, goal_column_), extend);
     }
-    goal_document_ = &document;
+    goal_document_ = document.id();
     goal_cursor_ = document.cursor();
 }
 
@@ -879,7 +937,7 @@ void EditorView::insert_typed(Document& document, std::string_view text) {
 }
 
 void EditorView::insert_pasted(std::string_view text) {
-    Document* document = workspace.active();
+    Document* document = this->document();
     if (!document || document->hidden_as_binary() || text.empty()) {
         return;
     }
@@ -946,7 +1004,7 @@ void EditorView::indent(Document& document, bool add) {
 }
 
 bool EditorView::copy_selection() {
-    Document* document = workspace.active();
+    Document* document = this->document();
     if (!document || !document->has_selection()) {
         return false;
     }
@@ -982,7 +1040,7 @@ void EditorView::paste(Document& document) {
 }
 
 void EditorView::cut() {
-    if (Document* document = workspace.active()) {
+    if (Document* document = this->document()) {
         cut_selection(*document);
     }
 }
@@ -994,13 +1052,13 @@ void EditorView::copy() {
 }
 
 void EditorView::paste_clipboard() {
-    if (Document* document = workspace.active(); document && !document->hidden_as_binary()) {
+    if (Document* document = this->document(); document && !document->hidden_as_binary()) {
         paste(*document);
     }
 }
 
 void EditorView::select_all() {
-    if (Document* document = workspace.active()) {
+    if (Document* document = this->document()) {
         document->select(0, document->text().size());
     }
 }

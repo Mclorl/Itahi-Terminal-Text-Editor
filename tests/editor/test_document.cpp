@@ -1,6 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
+#include <cstdint>
 #include <string>
+#include <vector>
 
 #include "editor/document.hpp"
 #include "editor/motion.hpp"
@@ -21,7 +24,10 @@ TEST_CASE("a document knows when it differs from the file on disk") {
     doc.replace(0, 0, "> ");
     doc.mark_saved();
     CHECK_FALSE(doc.unsaved());
-    CHECK(doc.saved_text() == "> hello");
+    doc.replace(0, 2, "", false);
+    CHECK(doc.unsaved());
+    CHECK(doc.undo());                       // back to what was saved
+    CHECK_FALSE(doc.unsaved());
 }
 
 TEST_CASE("lines, with \\n and \\r\\n line breaks") {
@@ -116,4 +122,115 @@ TEST_CASE("word and character moves") {
     CHECK(next_char(utf8, 1) == 3);          // over both bytes of "é"
     CHECK(previous_char(utf8, 3) == 1);
     CHECK(previous_char(utf8, 0) == 0);
+}
+
+TEST_CASE("undo keeps only what changed, within a budget") {
+    std::string big(200000, 'x');
+    Document doc("big.txt", big, true);
+    for (int i = 0; i < 50; ++i) {
+        doc.replace(static_cast<std::size_t>(i) * 10, static_cast<std::size_t>(i) * 10, "edit", false);
+    }
+    CHECK(doc.undo_steps() == 50);
+    CHECK(doc.history_bytes() < 10000);      // not 50 copies of the text
+    for (int i = 0; i < 50; ++i) {
+        CHECK(doc.undo());
+    }
+    CHECK(doc.text() == big);
+    CHECK_FALSE(doc.unsaved());
+
+    // Backspace over what was just typed leaves nothing behind.
+    Document typed("t.txt", "", false);
+    typed.replace(0, 0, "a");
+    typed.replace(1, 1, "b");
+    typed.replace(1, 2, "");
+    CHECK(typed.text() == "a");
+    CHECK(typed.undo());
+    CHECK(typed.text().empty());
+    CHECK(typed.redo());
+    CHECK(typed.text() == "a");
+}
+
+TEST_CASE("the line index follows every edit") {
+    // against a count from scratch, after edits of every kind.
+    Document doc("lines.txt", "one\ntwo\nthree\n", true);
+    const auto check = [&doc] {
+        std::vector<std::size_t> expected{0};
+        for (std::size_t i = 0; i < doc.text().size(); ++i) {
+            if (doc.text()[i] == '\n') {
+                expected.push_back(i + 1);
+            }
+        }
+        CHECK(doc.line_starts() == expected);
+    };
+    unsigned seed = 12345;
+    const auto next = [&seed](std::size_t limit) {
+        seed = seed * 1103515245u + 12345u;
+        return static_cast<std::size_t>((seed >> 8) % (limit + 1));
+    };
+    const char* pieces[] = {"", "x", "\n", "ab\ncd", "\n\n", "\r\n", "long line without a break"};
+    for (int i = 0; i < 400; ++i) {
+        const std::size_t begin = next(doc.text().size());
+        const std::size_t end = std::min(doc.text().size(), begin + next(6));
+        doc.replace(begin, end, pieces[next(6)], i % 3 == 0);
+        check();
+        if (i % 7 == 0) {
+            doc.undo();
+            check();
+        }
+        if (i % 11 == 0) {
+            doc.redo();
+            check();
+        }
+    }
+    while (doc.undo()) {
+    }
+    check();
+}
+
+TEST_CASE("every edit is reported with its position, for the syntax tree") {
+    Document doc("e.txt", "ab\ncd\n", true);
+    const std::uint64_t before = doc.version();
+    doc.replace(4, 5, "X\nY", false);        // "ab\ncX\nY\n"
+    std::vector<TextEdit> edits;
+    REQUIRE(doc.edits_since(before, edits));
+    REQUIRE(edits.size() == 1);
+    CHECK(edits[0].start == 4);
+    CHECK(edits[0].old_end == 5);
+    CHECK(edits[0].new_end == 7);
+    CHECK(edits[0].start_point.row == 1);
+    CHECK(edits[0].start_point.column == 1);
+    CHECK(edits[0].new_end_point.row == 2);
+    CHECK(edits[0].new_end_point.column == 1);
+    CHECK(doc.edits_since(doc.version(), edits));
+    CHECK(edits.empty());
+    CHECK_FALSE(doc.edits_since(doc.version() + 1, edits));   // a version it never had
+}
+
+TEST_CASE("each window has its own cursor in a document, and follows the edits") {
+    Document doc("v.txt", "line one\nline two\nline three\n", true);
+    doc.set_cursor(20);                      // view 0, in "line three"
+    doc.use_view(7);                         // a second window: starts where the first is
+    CHECK(doc.cursor() == 20);
+    doc.set_cursor(0);
+    doc.replace(0, 0, "NEW\n");              // typed at the top, in view 7
+    CHECK(doc.cursor() == 4);
+    doc.use_view(0);
+    CHECK(doc.cursor() == 24);               // still at the same place in "line three"
+    doc.use_view(7);
+    CHECK(doc.cursor() == 4);
+    doc.drop_view(0);
+    doc.use_view(0);                         // forgotten: starts where view 7 is
+    CHECK(doc.cursor() == 4);
+}
+
+TEST_CASE("a file changed on disk is read again as one step that can be undone") {
+    Document doc("r.txt", "alpha\nbeta\ngamma\n", true);
+    doc.set_cursor(12);                      // in "gamma"
+    doc.reload("alpha\nBETA and more\ngamma\n");
+    CHECK(doc.text() == "alpha\nBETA and more\ngamma\n");
+    CHECK_FALSE(doc.unsaved());
+    CHECK(doc.cursor() == 21);               // still in "gamma"
+    CHECK(doc.undo());
+    CHECK(doc.text() == "alpha\nbeta\ngamma\n");
+    CHECK(doc.unsaved());
 }

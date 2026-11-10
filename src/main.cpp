@@ -68,6 +68,3 @@ int main(int argc, char* argv[]) {
 
     return run_app({folder, arg_is_file, config_path});
 }
-
-// fix the layout and UI of the custom dropdown manu style.
-// fix the bug where when going up using the arrows on the explorer switches to the tab selection.

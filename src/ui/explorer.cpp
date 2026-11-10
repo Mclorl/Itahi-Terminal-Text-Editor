@@ -1,60 +1,41 @@
 #include "ui/explorer.hpp"
 
 #include <algorithm>
-#include <filesystem>
 #include <memory>
-#include <optional>
-#include <string>
 #include <system_error>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
-#include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/mouse.hpp>
-#include <ftxui/component/screen_interactive.hpp>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/dom/node.hpp>
 #include <ftxui/screen/string.hpp>
 
 #include "core/file_io.hpp"
+#include "editor/paths.hpp"
 #include "editor/settings.hpp"
 #include "editor/state.hpp"
 #include "editor/workspace.hpp"
 #include "syntax/theme.hpp"
+#include "ui/command_line.hpp"
 #include "ui/ui_state.hpp"
 #include "ui/widgets.hpp"
 
 namespace fs = std::filesystem;
 
-namespace {
-
-    // whether the name shown for a path had to be cut (see truncate_name).
-    std::unordered_map<std::string, bool>& name_was_cut() {
-        static std::unordered_map<std::string, bool> cut;
-        return cut;
-    }
-
-}  // namespace
-
-std::string truncate_name(const std::string& name, int available_width, const std::string& path) {
+std::string truncate_name(const std::string& name, int available_width) {
     if (available_width <= 0) {
         return {};
     }
-
     // measured in terminal cells, not bytes: "日本" is 6 bytes but 4 cells.
     if (ftxui::string_width(name) <= available_width) {
-        name_was_cut()[path] = false;
         return name;
     }
-
-    name_was_cut()[path] = true;
-
     const std::string suffix = "...";
     if (available_width <= static_cast<int>(suffix.size())) {
         return suffix.substr(0, static_cast<std::size_t>(available_width));
     }
-
     // never cut inside a character.
     const int room = available_width - static_cast<int>(suffix.size());
     const std::vector<std::string> glyphs = ftxui::Utf8ToGlyphs(name);
@@ -76,313 +57,398 @@ std::string truncate_name(const std::string& name, int available_width, const st
 
 namespace {
 
-    int available_name_width(int panel_width, int indentation_level) {
-        constexpr int border_width = 4;
-        constexpr int indentation_width = 1;
-        constexpr int scrollbar_width = 1;
-        constexpr int git_mark_width = 2;  // " M" on the right
+    using ftxui::Event;
 
-        return std::max(1, panel_width - border_width - scrollbar_width - git_mark_width - indentation_level * indentation_width);
-    }
+    // after the folder Ctrl+N makes new files in.
+    const char* const new_files_mark = " +";
+    const int new_files_mark_cells = 2;
 
-    // the entries of a folder; a folder that can't be read shows its error
-    // on the command line instead of crashing the editor.
-    std::vector<fs::path> folder_entries(const fs::path& folder) {
-        std::string error;
-        std::vector<fs::path> entries = list_directory(folder, error);
-        if (!error.empty()) {
-            command_error = error;
-        }
-        return entries;
-    }
+    struct Row {
+        std::string path;
+        std::string name;
+        int depth = 0;
+        bool folder = false;
+    };
 
-    // Git's mark on the right of a row: what changed, like vscode.
-    ftxui::Element git_mark(const std::string& path, bool folder) {
-        if (!git_status.in_repository) {
-            return ftxui::text("");
-        }
-        if (folder) {
-            const char state = git_status.state_of(path);
-            if (state == '?') {
-                return ftxui::color(ftxui::Color::GreenLight, ftxui::text(" U"));
+    // writes `text` from column `x` (not past `x_end`); returns the column after it.
+    int put(ftxui::Screen& screen, int x, int y, int x_end, const std::string& text, ftxui::Color color, bool bold, bool dim) {
+        for (const std::string& glyph : ftxui::Utf8ToGlyphs(text)) {
+            if (x >= x_end) {
+                break;
             }
-            return git_status.changes_under(path) ? ftxui::color(ftxui::Color::Gold1, ftxui::text(" •")) : ftxui::text("");
+            ftxui::Cell& cell = screen.CellAt(x, y);
+            cell.character = glyph;
+            cell.foreground_color = color;
+            cell.bold = bold;
+            cell.dim = dim;
+            ++x;
         }
-        switch (git_status.state_of(path)) {
-            case 'M': return ftxui::color(ftxui::Color::Gold1, ftxui::text(" M"));
-            case 'A': return ftxui::color(ftxui::Color::GreenLight, ftxui::text(" A"));
-            case '?': return ftxui::color(ftxui::Color::GreenLight, ftxui::text(" U"));
-            case 'D': return ftxui::color(ftxui::Color::RedLight, ftxui::text(" D"));
-            case 'R': return ftxui::color(ftxui::Color::SkyBlue1, ftxui::text(" R"));
-            case 'U': return ftxui::color(ftxui::Color::Red, ftxui::text(" !"));
-            default: return ftxui::text("");
-        }
+        return x;
     }
 
-    // what the editor shows for a file row: the name, "*" when unsaved,
-    // yellow when unsaved and not open, the theme's color when open, dim when
-    // Git ignores it, and Git's mark on the right.
-    ftxui::Element file_row_element(const std::string& path, const std::string& label, bool focused) {
-        const Document* document = workspace.find(path);
-        const bool unsaved = document && document->unsaved();
-        const bool is_open_in_editor = active_path() == path;
+    class ExplorerView : public ftxui::ComponentBase {
+    public:
+        explicit ExplorerView(fs::path root) : root_(std::move(root)) { rebuild(); }
 
-        std::string display_name = label;
-        // a cut name already ends in "..."; drop one dot to make room for "*".
-        if (unsaved && name_was_cut()[path] && !display_name.empty()) {
-            display_name.pop_back();
+        bool Focusable() const override { return !rows_.empty(); }
+
+        const std::string& selected_path() const {
+            static const std::string none;
+            return chosen_ && selected_ < rows_.size() ? rows_[selected_].path : none;
         }
+        bool selected_is_folder() const { return chosen_ && selected_ < rows_.size() && rows_[selected_].folder; }
+        bool contains(int x, int y) const { return panel_box.Contain(x, y); }
 
-        ftxui::Element e = ftxui::text("  " + display_name + (unsaved ? "*" : ""));
-        if (is_open_in_editor) {
-            // the opened file keeps its color even when the explorer is not
-            // focused, so the user can still see it while editing.
-            e = ftxui::color(current_theme().open_file, e);
-        } else if (unsaved) {
-            e = ftxui::color(ftxui::Color::Yellow1, e);
-        } else if (git_status.ignored(path)) {
-            e = ftxui::dim(e);
-        }
-        e = ftxui::hbox({e, ftxui::filler(), git_mark(path, false)});
-
-        // remember this row's screen box so the view can be scrolled to it
-        // independently of the selection.
-        e = e | capture_box(left_panel_row_boxes[path]);
-
-        return focused ? ftxui::bold(e) : e;
-    }
-
-    // adds a button for every regular file in `file_paths` to `container`.
-    void add_file_rows(ftxui::Component container, const std::vector<fs::path>& file_paths, int& panel_width, int indentation) {
-        for (const fs::path& p : file_paths) {
-            std::error_code ec;
-            if (!fs::is_regular_file(fs::status(p, ec)) || ec) {
-                continue;
-            }
-
-            const std::string display_name = truncate_name(p.filename().string(), available_name_width(panel_width, indentation), p.string());
-
-            ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-
-            // Raw pointer to the container owning this button. A raw pointer is used
-            // on purpose: capturing the shared_ptr would create a reference cycle
-            // (container -> button -> transform -> container). The container always
-            // outlives its children, so this is safe.
-            ftxui::ComponentBase* owner = container.get();
-
-            option.transform = [path = p.string(), owner](const ftxui::EntryState& current_state) {
-                // Only the row that genuinely owns the selection updates the cache.
-                // `active` is used instead of `focused`, because FTXUI reports
-                // `focused` for hovered rows too; combined with `owner->Focused()`
-                // this means hovering the explorer while the focus is in the main
-                // content no longer overwrites the cached selection.
-                if (current_state.active && owner->Focused() && left_panel_selected_file_path != path) {
-                    left_panel_selected_file_path = path;
-                    explorer_selected_path = path;
-                    explorer_selected_is_folder = false;
-                    // the view follows the selection using the row boxes measured
-                    // during layout, ie. one frame late: ask for that one extra
-                    // frame. (Only on a change: posting on every render made the
-                    // app redraw non-stop at 100% CPU.)
-                    screen->PostEvent(ftxui::Event::Custom);
+        std::vector<std::string> shown_folders() const {
+            std::vector<std::string> folders{root_.string()};
+            for (const Row& row : rows_) {
+                if (row.folder && workspace.opened_folders.count(row.path) != 0) {
+                    folders.push_back(row.path);
                 }
-                return file_row_element(path, current_state.label, current_state.focused);
+            }
+            return folders;
+        }
+
+        // reads every shown folder again.
+        void refresh() {
+            listings_.clear();
+            rebuild();
+        }
+
+        ftxui::Element OnRender() override {
+            if (signature() != signature_) {
+                rebuild();  // a command opened or closed folders
+            }
+            if (Focused()) {
+                chosen_ = true;
+            }
+            class Canvas : public ftxui::Node {
+            public:
+                Canvas(ExplorerView* view, bool focused) : view_(view), focused_(focused) {}
+                void ComputeRequirement() override {
+                    requirement_.min_x = 1;
+                    requirement_.min_y = 1;
+                    requirement_.flex_grow_x = requirement_.flex_grow_y = 1;
+                    requirement_.flex_shrink_x = requirement_.flex_shrink_y = 1;
+                }
+                void Render(ftxui::Screen& screen) override {
+                    view_->paint(screen, ftxui::Box::Intersection(box_, screen.stencil), focused_);
+                }
+
+            private:
+                ExplorerView* view_;
+                bool focused_;
             };
-
-            auto button = ftxui::Button(display_name, [p]() {
-                std::string error;
-                if (!workspace.open(p, error)) {
-                    command_error = error;  // an unreadable file must never look empty
-                    return;
-                }
-                if (show_editor) {
-                    show_editor();
-                }
-                if (screen) {
-                    screen->PostEvent(ftxui::Event::Custom);
-                }
-            }, option);
-
-            container->Add(button);
+            return std::make_shared<Canvas>(this, Focused());
         }
-    }
 
-    // adds a folder row (and its children while open) for every folder in `file_paths` to `parent_container`.
-    void add_folder_rows(const std::vector<fs::path>& file_paths, ftxui::Component parent_container, int& panel_width, int indentation) {
-        for (const fs::path& p : file_paths) {
-            std::error_code ec;
-            if (!fs::is_directory(fs::status(p, ec)) || ec) {
-                continue;
+        void paint(ftxui::Screen& screen, const ftxui::Box& box, bool focused) {
+            box_ = box;
+            if (box.x_max < box.x_min || box.y_max < box.y_min) {
+                return;
             }
-            if (p.filename() == ".git") {
-                continue;  // never something you want to browse in an editor
+            const int view_rows = box.y_max - box.y_min + 1;
+            scroll_.view_rows = view_rows;
+            scroll_.content_rows = std::max(static_cast<int>(rows_.size()), view_rows);
+            scroll_.top = std::clamp(scroll_.top, 0, scroll_.content_rows - view_rows);
+            if (follow_) {
+                scroll_.keep_visible(static_cast<int>(selected_));
+                follow_ = false;
             }
-            const std::string path = p.string();
 
-            const std::string display_name = truncate_name(p.filename().string(), available_name_width(panel_width, indentation), path);
+            const Theme& theme = current_theme();
+            const std::string& open_path = active_path();
+            // where a new file would go: marked with a '+', so Ctrl+N is no surprise.
+            const std::string new_files = current_new_file_folder().lexically_normal().string();
+            const int bar_x = box.x_max;        // the scroll bar
+            const int marks_x = bar_x - 2;      // Git's mark: " M"
+            const ftxui::Color guide = ftxui::Color::RGB(80, 80, 80);
+            const ftxui::Color guide_lit = ftxui::Color::RGB(150, 150, 150);
 
-            // separate container for each folder
-            auto children_container = ftxui::Container::Vertical({});
+            for (int i = 0; i < view_rows; ++i) {
+                const std::size_t index = static_cast<std::size_t>(scroll_.top + i);
+                if (index >= rows_.size()) {
+                    break;
+                }
+                const Row& row = rows_[index];
+                const int y = box.y_min + i;
+                const bool selected = index == selected_;
+                const bool lit = selected && focused;
 
-            auto visible_children = ftxui::Maybe(children_container, [path] {
-                return workspace.opened_folders.count(path) != 0;
-            });
-
-            auto folder_component = ftxui::Container::Vertical({});
-
-            ftxui::ButtonOption option = ftxui::ButtonOption::Simple();
-            // raw pointer for the same reason as for the file rows: no reference cycle.
-            ftxui::ComponentBase* owner = folder_component.get();
-
-            option.transform = [path, owner](const ftxui::EntryState& current_state) {
-                // the folder row owns the selection (keyboard or click): remember
-                // it for New File.
-                if (current_state.active && owner->Focused() &&
-                    (explorer_selected_path != path || !explorer_selected_is_folder)) {
-                    explorer_selected_path = path;
-                    explorer_selected_is_folder = true;
+                // the margin: a bar on the row the keys are on.
+                int x = box.x_min;
+                x = put(screen, x, y, marks_x, lit ? "┃" : " ", theme.accent, lit, false);
+                // a line for every folder the row is inside of.
+                for (int d = 0; d < row.depth; ++d) {
+                    const bool under_selected = focused && selected_ < rows_.size() && rows_[selected_].folder &&
+                                                rows_[selected_].depth == d && row.path.compare(0, rows_[selected_].path.size() + 1, rows_[selected_].path + "/") == 0;
+                    x = put(screen, x, y, marks_x, "│", under_selected ? guide_lit : guide, false, false);
                 }
 
-                const bool is_open = workspace.opened_folders.count(path) != 0;
-                const std::string prefix = is_open ? "v " : "> ";
-
-                ftxui::Element e = ftxui::text(prefix + current_state.label);
-                if (workspace.unsaved_under(path)) {
-                    e = ftxui::color(ftxui::Color::Yellow1, e);
-                } else if (git_status.ignored(path)) {
-                    e = ftxui::dim(e);
+                const Document* document = row.folder ? nullptr : workspace.find(row.path);
+                const bool unsaved = row.folder ? workspace.unsaved_under(row.path) : document && document->unsaved();
+                const bool ignored = git_status.ignored(row.path);
+                ftxui::Color color = ftxui::Color::Default;
+                if (!row.folder && row.path == open_path) {
+                    color = theme.open_file;  // the file in the active window
+                } else if (unsaved) {
+                    color = ftxui::Color::Yellow1;
                 }
-                e = ftxui::hbox({e, ftxui::filler(), git_mark(path, true)});
-                return current_state.focused ? ftxui::bold(e) : e;
-            };
+                const bool dim = color == ftxui::Color::Default && ignored;
+                const bool takes_new_files = row.folder && fs::path(row.path).lexically_normal().string() == new_files;
 
-            // fills the folder's rows from disk.
-            auto fill_children = [path, children_container, &panel_width, indentation] {
-                children_container->DetachAllChildren();
-                const std::vector<fs::path> folder_content = folder_entries(path);
-                add_folder_rows(folder_content, children_container, panel_width, indentation + 1);
-                add_file_rows(children_container, folder_content, panel_width, indentation + 1);
-            };
+                const std::string prefix = row.folder ? (workspace.opened_folders.count(row.path) != 0 ? "v " : "> ") : "  ";
+                // cells after the name: '*' for unsaved, the new-files mark.
+                const int suffix_cells = (!row.folder && unsaved ? 1 : 0) + (takes_new_files ? new_files_mark_cells : 0);
+                x = put(screen, x, y, marks_x, prefix, color, lit, dim);
+                const int room = marks_x - x - suffix_cells;
+                x = put(screen, x, y, marks_x, truncate_name(row.name, room), color, lit, dim);
+                if (!row.folder && unsaved) {
+                    x = put(screen, x, y, marks_x, "*", color, lit, dim);
+                }
+                if (takes_new_files) {
+                    put(screen, x, y, marks_x, new_files_mark, theme.accent, true, false);
+                }
+                paint_git_mark(screen, marks_x, y, row);
+            }
+            paint_scroll_bar(screen, bar_x, box.y_min, box.y_max, scroll_.top, static_cast<int>(rows_.size()));
+        }
 
-            auto button = ftxui::Button(display_name, [path, fill_children]() {
-                if (workspace.opened_folders.count(path)) {
-                    workspace.opened_folders.erase(path);
+        bool OnEvent(Event event) override {
+            if (event.is_mouse()) {
+                return on_mouse(event);
+            }
+            if (!Focused() || rows_.empty()) {
+                return false;
+            }
+            chosen_ = true;
+            const int last = static_cast<int>(rows_.size()) - 1;
+            const int at = static_cast<int>(selected_);
+            const int page = std::max(1, scroll_.view_rows - 1);
+            const Row& row = rows_[selected_];
+
+            // every key that moves stays in the explorer: at the first or last
+            // row it simply doesn't move (it used to jump to the menu bar).
+            if (event == Event::ArrowUp || event == Event::Character('k')) { select(std::max(0, at - 1)); return true; }
+            if (event == Event::ArrowDown || event == Event::Character('j')) { select(std::min(last, at + 1)); return true; }
+            if (event == Event::Tab) { select(at == last ? 0 : at + 1); return true; }
+            if (event == Event::TabReverse) { select(at == 0 ? last : at - 1); return true; }
+            if (event == Event::PageUp) { select(std::max(0, at - page)); return true; }
+            if (event == Event::PageDown) { select(std::min(last, at + page)); return true; }
+            if (event == Event::Home) { select(0); return true; }
+            if (event == Event::End) { select(last); return true; }
+
+            // Right opens a folder, then goes into it; Left closes it, or goes
+            // to the folder the row is in (like vscode).
+            if (event == Event::ArrowRight || event == Event::Character('l')) {
+                if (row.folder && workspace.opened_folders.count(row.path) == 0) {
+                    toggle(row.path);
+                } else if (row.folder && at < last && rows_[selected_ + 1].depth > row.depth) {
+                    select(at + 1);
+                }
+                return true;
+            }
+            if (event == Event::ArrowLeft || event == Event::Character('h')) {
+                if (row.folder && workspace.opened_folders.count(row.path) != 0) {
+                    toggle(row.path);
                 } else {
-                    workspace.opened_folders.insert(path);
-                    fill_children();
+                    for (int i = at - 1; i >= 0; --i) {
+                        if (rows_[static_cast<std::size_t>(i)].depth < row.depth) {
+                            select(i);
+                            break;
+                        }
+                    }
                 }
-                screen->PostEvent(ftxui::Event::Custom);
-            }, option);
-
-            // after resizing, reconstruct its children immediately.
-            if (workspace.opened_folders.count(path) != 0) {
-                fill_children();
+                return true;
             }
-
-            // render the subfolder with indentation.
-            auto indented_children = ftxui::Renderer(visible_children, [visible_children, path, button] {
-                if (workspace.opened_folders.count(path) == 0) {
-                    return ftxui::emptyElement();
-                }
-
-                auto separator = ftxui::color(ftxui::Color::RGB(150, 150, 150), ftxui::separator());
-                if (!button->Focused()) {
-                    separator = ftxui::color(ftxui::Color::RGB(80, 80, 80), ftxui::separator());
-                }
-
-                // the rows take the panel's whole width, so Git's marks stay on its right edge.
-                return ftxui::hbox({separator, visible_children->Render() | ftxui::xflex});
-            });
-
-            folder_component->Add(button);
-            folder_component->Add(indented_children);
-
-            parent_container->Add(folder_component);
+            if (event == Event::Return) {
+                activate(row);
+                return true;
+            }
+            // F2 renames and Delete deletes the row, on the command line where
+            // it can still be changed or cancelled.
+            if (event == Event::F2 && open_command_line) {
+                open_command_line("rename " + row.name);
+                return true;
+            }
+            if (event == Event::Delete && open_command_line) {
+                open_command_line("rm");
+                return true;
+            }
+            return false;
         }
-    }
 
-    // what the panel keeps between frames.
-    struct PanelState {
-        fs::path root;
-        std::vector<fs::path> entries;   // the root folder's entries
-        int previous_width = 0;
-        // the explorer's viewport: the wheel moves it by whole rows; moving the
-        // selection scrolls it only as far as needed to keep the row visible.
-        ScrollState scroll;
-        bool previous_focused = false;
-        std::string previous_selected;
-        // screen region of the explorer, and the full (possibly taller than the
-        // view) box of its rows, used with the row boxes to follow the selection.
         ftxui::Box panel_box;
-        ftxui::Box content_box;
+
+    private:
+        // changes when a folder is opened or closed by anything.
+        std::size_t signature() const {
+            std::size_t sum = workspace.opened_folders.size();
+            for (const std::string& folder : workspace.opened_folders) {
+                sum += std::hash<std::string>{}(folder);
+            }
+            return sum;
+        }
+
+        const std::vector<DirEntry>& listing(const std::string& folder) {
+            const auto found = listings_.find(folder);
+            if (found != listings_.end()) {
+                return found->second;
+            }
+            // a folder that can't be read shows its error instead of crashing.
+            std::string error;
+            std::vector<DirEntry> entries = list_directory_entries(folder, error);
+            if (!error.empty()) {
+                command_error = error;
+            }
+            return listings_[folder] = std::move(entries);
+        }
+
+        void add_rows(const std::string& folder, int depth) {
+            if (depth > 64) {
+                return;  // links that lead back into themselves
+            }
+            const std::vector<DirEntry> entries = listing(folder);
+            for (const DirEntry& entry : entries) {
+                // .git: never something you want to browse in an editor.
+                if (!entry.is_directory || entry.path.filename() == ".git") {
+                    continue;
+                }
+                rows_.push_back({entry.path.string(), entry.path.filename().string(), depth, true});
+                if (workspace.opened_folders.count(entry.path.string()) != 0) {
+                    add_rows(entry.path.string(), depth + 1);
+                }
+            }
+            for (const DirEntry& entry : entries) {
+                if (entry.is_regular_file) {
+                    rows_.push_back({entry.path.string(), entry.path.filename().string(), depth, false});
+                }
+            }
+        }
+
+        void rebuild() {
+            const std::string keep = selected_ < rows_.size() ? rows_[selected_].path : std::string();
+            rows_.clear();
+            add_rows(root_.string(), 0);
+            signature_ = signature();
+            const auto same = std::find_if(rows_.begin(), rows_.end(), [&](const Row& row) { return row.path == keep; });
+            if (same != rows_.end()) {
+                selected_ = static_cast<std::size_t>(same - rows_.begin());
+            } else {
+                selected_ = rows_.empty() ? 0 : std::min(selected_, rows_.size() - 1);
+            }
+        }
+
+        void select(int index) {
+            selected_ = static_cast<std::size_t>(index);
+            follow_ = true;
+        }
+
+        void toggle(const std::string& folder) {
+            if (workspace.opened_folders.erase(folder) == 0) {
+                workspace.opened_folders.insert(folder);
+                listings_.erase(folder);  // read when it opens: what is in it may have changed
+            }
+            rebuild();
+            call(hooks.refresh_explorer);  // the folders to watch changed
+        }
+
+        void activate(const Row& row) {
+            if (row.folder) {
+                toggle(row.path);
+                return;
+            }
+            std::string error;
+            if (!workspace.open(row.path, error)) {
+                command_error = error;  // an unreadable file must never look empty
+                return;
+            }
+            call(hooks.show_editor);
+        }
+
+        bool on_mouse(Event event) {
+            const ftxui::Mouse& mouse = event.mouse();
+            if (mouse.button != ftxui::Mouse::Left || mouse.motion != ftxui::Mouse::Pressed || !box_.Contain(mouse.x, mouse.y)) {
+                return false;
+            }
+            TakeFocus();
+            chosen_ = true;
+            const std::size_t index = static_cast<std::size_t>(scroll_.top + mouse.y - box_.y_min);
+            if (index < rows_.size()) {
+                selected_ = index;
+                activate(Row(rows_[index]));
+            }
+            return true;
+        }
+
+        void paint_git_mark(ftxui::Screen& screen, int x, int y, const Row& row) {
+            if (!git_status.in_repository) {
+                return;
+            }
+            const char state = git_status.state_of(row.path);
+            const char* mark = "";
+            ftxui::Color color = ftxui::Color::Default;
+            if (row.folder) {
+                if (state == '?') { mark = "U"; color = ftxui::Color::GreenLight; }
+                else if (git_status.changes_under(row.path)) { mark = "•"; color = ftxui::Color::Gold1; }
+            } else {
+                switch (state) {
+                    case 'M': mark = "M"; color = ftxui::Color::Gold1; break;
+                    case 'A': mark = "A"; color = ftxui::Color::GreenLight; break;
+                    case '?': mark = "U"; color = ftxui::Color::GreenLight; break;
+                    case 'D': mark = "D"; color = ftxui::Color::RedLight; break;
+                    case 'R': mark = "R"; color = ftxui::Color::SkyBlue1; break;
+                    case 'U': mark = "!"; color = ftxui::Color::Red; break;
+                    default: break;
+                }
+            }
+            if (*mark) {
+                put(screen, x + 1, y, x + 2, mark, color, false, false);
+            }
+        }
+
+    public:
+        ScrollState scroll_;
+
+    private:
+        fs::path root_;
+        std::unordered_map<std::string, std::vector<DirEntry>> listings_;
+        std::vector<Row> rows_;
+        std::size_t signature_ = 0;
+        std::size_t selected_ = 0;
+        bool chosen_ = false;  // the user selected a row (it names the active folder)
+        bool follow_ = false;  // scroll to the selected row on the next frame
+        ftxui::Box box_;
     };
 
 }  // namespace
 
 ExplorerPanel make_explorer_panel(const fs::path& root, int& width) {
-    auto state = std::make_shared<PanelState>();
-    state->root = root;
-    state->previous_width = width;
-    std::string error;
-    state->entries = list_directory(root, error);
+    auto view = std::make_shared<ExplorerView>(root);
 
     ExplorerPanel explorer;
-    explorer.rows = ftxui::Container::Vertical({});
-    ftxui::Component rows = explorer.rows;
+    explorer.rows = view;
+    explorer.refresh = [view] { view->refresh(); };
+    explorer.contains = [view](int x, int y) { return view->contains(x, y); };
+    explorer.selected_path = [view] { return view->selected_path(); };
+    explorer.selected_is_folder = [view] { return view->selected_is_folder(); };
+    explorer.shown_folders = [view] { return view->shown_folders(); };
 
-    auto fill = [state, rows, &width] {
-        rows->DetachAllChildren();
-        add_folder_rows(state->entries, rows, width, 0);
-        add_file_rows(rows, state->entries, width, 0);
-    };
-    fill();
-
-    explorer.refresh = [state, fill] {
-        std::string list_error;
-        state->entries = list_directory(state->root, list_error);
-        if (!list_error.empty()) {
-            command_error = list_error;
-        }
-        fill();
-    };
-
-    explorer.contains = [state](int x, int y) { return state->panel_box.Contain(x, y); };
-
-    auto panel = ftxui::Renderer(rows, [state, rows, fill, &width] {
-        if (width != state->previous_width) {
-            // names are cut to the panel width when the rows are built, so a
-            // new width needs new rows.
-            state->previous_width = width;
-            fill();
-        }
-
-        ftxui::Element entries = rows->Render() | capture_box(state->content_box);
-        const bool focused = rows->Focused();
-
-        // the selection changed (keyboard or click), or the explorer just got
-        // the focus: scroll just enough to show the selected row. Row boxes
-        // are from the last frame, which is fine: rows don't move on their own.
-        const bool follow = focused && (!state->previous_focused || left_panel_selected_file_path != state->previous_selected);
-        state->previous_focused = focused;
-        state->previous_selected = left_panel_selected_file_path;
-        if (follow) {
-            const auto it = left_panel_row_boxes.find(left_panel_selected_file_path);
-            if (it != left_panel_row_boxes.end()) {
-                state->scroll.keep_visible(it->second.y_min - state->content_box.y_min);
-            }
-        }
-
+    auto panel = ftxui::Renderer(view, [view, &width] {
+        // the mark on the title when new files go to the opened folder itself.
+        const bool top_takes_new = current_new_file_folder().lexically_normal() == fs::path(workspace.root).lexically_normal();
         return ftxui::border(ftxui::vbox({
-                   ftxui::bold(ftxui::text("Explorer")),
+                   ftxui::hbox({ftxui::text(" "), ftxui::bold(ftxui::text("Explorer")),
+                                top_takes_new ? ftxui::bold(ftxui::color(current_theme().accent, ftxui::text(new_files_mark))) : ftxui::text("")}),
                    ftxui::separator(),
-                   scroll_frame(white_vscroll_indicator(entries), state->scroll) | ftxui::flex,
+                   view->Render() | ftxui::flex,
                })) |
-               ftxui::reflect(state->panel_box) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, width);
+               ftxui::reflect(view->panel_box) | ftxui::size(ftxui::WIDTH, ftxui::EQUAL, width);
     });
 
     // the wheel over the explorer scrolls its view by whole rows, and never
     // moves the selection or the focus.
-    explorer.panel = ftxui::CatchEvent(panel, [state](ftxui::Event event) {
+    explorer.panel = ftxui::CatchEvent(panel, [view](ftxui::Event event) {
         if (!event.is_mouse()) {
             return false;
         }
@@ -390,12 +456,12 @@ ExplorerPanel make_explorer_panel(const fs::path& root, int& width) {
         if (mouse.button != ftxui::Mouse::WheelUp && mouse.button != ftxui::Mouse::WheelDown) {
             return false;
         }
-        if (!state->panel_box.Contain(mouse.x, mouse.y)) {
+        if (!view->contains(mouse.x, mouse.y)) {
             return false;  // over the editor: not for the explorer
         }
         const int rows_per_notch = get_mouse_sensitivity();
-        state->scroll.scroll_by(mouse.button == ftxui::Mouse::WheelUp ? -rows_per_notch : rows_per_notch);
-        screen->PostEvent(ftxui::Event::Custom);
+        view->scroll_.scroll_by(mouse.button == ftxui::Mouse::WheelUp ? -rows_per_notch : rows_per_notch);
+        call(hooks.redraw);
         return true;
     });
     return explorer;

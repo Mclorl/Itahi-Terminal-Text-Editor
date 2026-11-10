@@ -30,6 +30,15 @@ struct Settings {
     std::string tab_size = "4";           // as typed: see get_tab_size()
     bool tab_inserts_spaces = true;       // Tab in Edit mode: spaces, or a tab character
     int scroll_style = SCROLL_KEEP_CURSOR_CENTERED;
+    // unsaved changes are copied to the state folder every few seconds, and
+    // offered back after a crash or a closed terminal (editor/recovery.hpp).
+    bool keep_recovery_copies = true;
+    // a file changed by another program is read again, unless it has unsaved
+    // changes here.
+    bool auto_reload = true;
+    // search: upper and lower case alike (Alt+C), whole words only (Alt+W).
+    bool search_ignore_case = false;
+    bool search_whole_word = false;
 
     // -- View tab --
     bool show_line_numbers = true;
@@ -41,7 +50,14 @@ struct Settings {
     bool show_status_bar = true;
     bool show_tabs = true;
     int theme = 0;  // index into themes() (syntax/theme.hpp)
+
+    // -- kept between runs, not in a tab --
+    int explorer_width = 25;  // columns, changed by dragging its separator
 };
+
+// the explorer can't be dragged narrower or wider than this.
+inline constexpr int min_explorer_width = 25;
+inline constexpr int max_explorer_width = 100;
 
 extern Settings settings;
 

@@ -11,8 +11,50 @@
 namespace fs = std::filesystem;
 
 fs::path current_new_file_folder() {
-    const std::string folder = active_folder ? active_folder() : std::string();
-    return folder.empty() ? fs::path(workspace.root) : fs::path(folder);
+    const std::string chosen = hooks.active_folder ? hooks.active_folder() : std::string();
+    fs::path folder = chosen.empty() ? fs::path(workspace.root) : fs::path(chosen);
+    // a folder deleted by another program must not be offered (and silently
+    // made again by the next new file): the nearest one above it that is
+    // still there, down to the opened folder.
+    const fs::path root = fs::path(workspace.root).lexically_normal();
+    std::error_code ec;
+    while (!fs::is_directory(folder, ec)) {
+        const fs::path above = folder.parent_path();
+        if (above.empty() || above == folder || folder.lexically_normal() == root) {
+            return fs::path(workspace.root);
+        }
+        folder = above;
+    }
+    return folder;
+}
+
+std::string absolute_normal(const fs::path& path) {
+    std::error_code ec;
+    const fs::path absolute = fs::absolute(path, ec);
+    std::string text = (ec ? path : absolute).lexically_normal().string();
+    while (text.size() > 1 && text.back() == '/') {
+        text.pop_back();
+    }
+    return text;
+}
+
+fs::path explorer_form(const fs::path& file) {
+    // compared as absolute paths, so "src/a.cpp", "./src/a.cpp" and
+    // "/home/me/project/src/a.cpp" are all the explorer's "./src/a.cpp".
+    std::error_code ec;
+    const fs::path root = fs::absolute(workspace.root, ec).lexically_normal();
+    const fs::path absolute = ec ? fs::path() : fs::absolute(file, ec).lexically_normal();
+    if (ec || absolute.empty()) {
+        return file;
+    }
+    const fs::path relative = absolute.lexically_relative(root);
+    if (relative.empty() || *relative.begin() == "..") {
+        return file;  // outside the opened folder
+    }
+    if (relative == ".") {
+        return fs::path(workspace.root);
+    }
+    return fs::path(workspace.root) / relative;
 }
 
 std::string active_folder_for_command() {
@@ -68,16 +110,15 @@ PathCompletion complete_path(const std::string& typed) {
     const fs::path folder = folder_part.empty() ? fs::path(workspace.root) : resolve_user_path(folder_part);
     std::string error;
     std::vector<std::string> names;
-    for (const fs::path& entry : list_directory(folder, error)) {
-        const std::string name = entry.filename().string();
+    for (const DirEntry& entry : list_directory_entries(folder, error)) {
+        const std::string name = entry.path.filename().string();
         if (name.rfind(prefix, 0) != 0) {
             continue;
         }
         if (name[0] == '.' && (prefix.empty() || prefix[0] != '.')) {
             continue;  // hidden, unless asked for
         }
-        std::error_code ec;
-        names.push_back(fs::is_directory(entry, ec) ? name + "/" : name);
+        names.push_back(entry.is_directory ? name + "/" : name);
     }
 
     PathCompletion result{typed, {}};

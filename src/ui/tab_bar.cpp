@@ -61,7 +61,7 @@ namespace {
                 tabs.push_back(tab);
                 tabs.push_back(ftxui::dim(ftxui::text("│")));
             }
-            return ftxui::hbox(std::move(tabs)) | ftxui::xframe | ftxui::reflect(box_);
+            return ftxui::hbox({ftxui::text(" "), ftxui::hbox(std::move(tabs)) | ftxui::xframe | ftxui::flex}) | ftxui::reflect(box_);
         }
 
         bool OnEvent(ftxui::Event event) override {
@@ -84,8 +84,8 @@ namespace {
                 if (on_close || mouse.button == ftxui::Mouse::Middle) {
                     const CommandResult result = close_active_file();
                     (result.ok ? command_output : command_error) = result.message;
-                } else if (show_editor) {
-                    show_editor();
+                } else {
+                    call(hooks.show_editor);
                 }
                 return true;
             }

@@ -4,19 +4,21 @@ A Terminal User Interface (TUI) text editor that has the familiar UI and inputs 
 
 ## Features
 
-- **File explorer** on the left, with folders that open and close, a resizable width (drag the `⋮` separator), markers for unsaved files and, in a Git repository, each file's state (`M` modified, `U` new, `A` added, `D` deleted, `•` on a folder with changes; ignored files dimmed).
+- **File explorer** on the left, with folders that open and close, a resizable width (drag the `⋮` separator, remembered for the next start), markers for unsaved files and, in a Git repository, each file's state (`M` modified, `U` new, `A` added, `D` deleted, `•` on a folder with changes; ignored files dimmed). `Right` / `Left` open and close folders, `F2` renames and `Delete` moves to the trash; a `+` marks the folder `Ctrl+N` makes new files in. Files and folders changed by other programs show up by themselves.
+- **Split windows**, like vscode: up to four windows, in one or two columns of one or two windows each. Each window has its own cursor and scroll position, also when two show the same file. Split with `>vsplit` / `>split` (or `w v` / `w s` in Normal mode, `Ctrl+\`), go from one to the other with `Ctrl` + arrows, move a window to another place with `Alt+Shift` + arrows, drag the line between two to resize (see [Windows](#windows)).
 - **Tabs for open files** above the editor: click one to show it, click its `x` (or middle-click it) to close it. `Alt+Left` / `Alt+Right` (or `Ctrl+Page Up` / `Ctrl+Page Down`) switch between them.
 - **Status bar** under the editor: the mode, the file (with `*` when unsaved), the Git branch and how many files changed, the selection, the line and column, the language, the indentation, the encoding and the line breaks (`LF` / `CRLF`).
-- **Menu bar** with File, Edit, View, Settings and Help tabs, usable with the mouse or the keyboard.
+- **Menu bar** with File, Edit, View, Settings and Help tabs, usable with the mouse or the keyboard. The Help tab (`F1`) lists every key and command.
 - **Modes like vim:** Normal, Edit and Command mode, shown on the right of the top bar.
 - **Commands like vim:** save, quit, open, save as, undo, redo, search, substitute and go to line (see below).
-- **Undo and redo** with `Ctrl+Z` / `Ctrl+Y`, or `u` / `Ctrl+R` in Normal mode.
+- **Undo and redo** with `Ctrl+Z` / `Ctrl+Y`, or `u` / `Ctrl+R` in Normal mode. A step keeps only what changed, so the history of a large file stays small.
 - **Selection and clipboard:** select with `Shift` + arrows, a mouse drag or `v` (Normal mode); `Ctrl+C` / `Ctrl+X` / `Ctrl+V` (or `y` / `d` / `p` in Normal mode) copy, cut and paste, also with the system clipboard (through the terminal, and through `wl-copy` / `xclip` / `xsel` when installed).
 - **Word wrap** (View tab): long lines continue on the next row; `Up` / `Down` move by row on screen.
 - **Tab characters** are shown as indentation up to the next tab stop (the Tab Size setting). The `Tab` key inserts spaces, or a tab character when *Tab Key Inserts Spaces* is off.
-- **Fast with large files:** the editor draws only the rows on screen, so typing in a 100,000-line file stays quick.
+- **Fast with large files:** the editor draws only the rows on screen and tells the syntax highlighter exactly what changed, so typing in a 100,000-line file stays quick. Files over 5 MB are shown without syntax colors (the status bar says so).
 - **Scroll style** (Settings tab): *Keep cursor centered* (default) keeps the cursor in the middle of the view and the mouse wheel moves the cursor; *Scroll freely* lets the wheel move only the view, so the cursor can go off screen until you move it again.
-- **Safe saving:** files are written to a temporary file and renamed into place, so a failed save never damages the original. Changes made to a file outside the editor are detected before saving over them.
+- **Safe saving:** files are written to a temporary file and renamed into place, so a failed save never damages the original. A file changed by another program is read again by itself when it has no unsaved changes here; when it has, Itahi says so and never saves over the other version unless told to (`>w!`).
+- **Recovery after a crash:** unsaved changes are copied to `~/.local/state/itahi/recovery/` (readable only by you) a moment after you stop typing, and when the terminal is closed. The next start offers them back with `>recover`.
 - **Syntax highlighting** for about 50 languages (C, C++, Python, JavaScript, TypeScript, Rust, Go, Java, CMake, Markdown, ...) powered by [tree-sitter](https://github.com/tree-sitter/tree-sitter), with colors you can change in the View tab.
 - **Themes** (View tab): *Itahi*, *Ember*, *Glacier*, *Grove* and *Mono* set every syntax color and the editor's accents at once; each color can still be changed after.
 - **Settings are kept:** every View and Settings choice is saved in `~/.config/itahi/config` (or `$XDG_CONFIG_HOME/itahi/config`) as soon as it changes.
@@ -67,7 +69,7 @@ sudo apt install cmake build-essential git
    cmake --build build -j
    ```
 
-   The editor is built as `build/itahi`. Run the tests with `ctest --test-dir build`.
+   The editor is built as `build/itahi`. Run the tests with `ctest --test-dir build`: the unit tests, and (when Python has `pyte`: `pip install pyte`) scripted sessions of the real editor in a terminal emulator, see `tests/scenarios/`.
 
 4. *(Optional)* Install it on your `PATH` so you can start it from any folder:
 
@@ -106,20 +108,27 @@ The editor starts in **Normal mode**. Select a file in the explorer to open it.
 | `Ctrl+C` / `Ctrl+X` / `Ctrl+V` | Any | Copy / cut / paste |
 | `Alt+Left` / `Alt+Right` | Normal, Edit | Previous / next open file (also `Ctrl+Page Up` / `Ctrl+Page Down`) |
 | `F5` | Normal, Edit | Read the folders and the Git status again (after changes made by other programs) |
-| `/` or `?` | Normal | Find, like vscode: every match is highlighted as you type; `Enter` (or `Down`) goes to the next match, again and again; `Up` goes back; `Esc` closes |
+| `/` or `?` | Normal | Find, like vscode: every match is highlighted as you type; `Enter` (or `Down`) goes to the next match, again and again; `Up` goes back; `Alt+C` matches any case (or end the text with `\c`), `Alt+W` whole words only; `Esc` closes |
 | `n` / `N` | Normal | Next / previous match of the last search |
 | `u` / `Ctrl+R` | Normal | Undo / redo |
 | `Ctrl+Z` / `Ctrl+Y` | Normal, Edit | Undo / redo |
 | `Ctrl+S` | Normal, Edit | Save |
 | `Ctrl+N` | Normal | New file in the active folder (see below) |
-| `Ctrl` + arrows, or `Ctrl` + `H` `J` `K` `L` | Normal | Move between the top bar, the explorer and the editor |
+| `Ctrl` + arrows, or `Ctrl` + `H` `J` `K` `L` | Normal | Go to what is on that side: another window, the explorer (left) or the menu bar (up) |
+| `F6` / `Shift+F6` | Normal, Edit | The next / previous part: the explorer, then every window |
+| `w` then a key | Normal | Windows, see [Windows](#windows) |
+| `Ctrl+\` | Normal, Edit | Split: a new window on the right |
+| `Alt+Shift` + arrows | Normal, Edit | Move the window to that side |
+| `F1` | Normal, Edit | The keys and commands (Help tab) |
+| `F2` / `Delete` | Explorer | Rename / move to the trash the selected file or folder |
+| `Right` / `Left` | Explorer | Open a folder, then go into it / close it, or go to the folder above |
 | `Tab` / `Shift+Tab` | Edit | Indent / unindent |
 | `>` | Normal | Open the command line at the bottom of the editor |
 | `Ctrl+C` | Any | With text selected: copy it. Otherwise quit (refused while a file has unsaved changes) |
 
 ### Commands
 
-Press `>` and type a command, then `Enter`. `Esc` (or deleting the `>`) closes the command line.
+Press `>` and type a command, then `Enter`. `Esc` (or deleting the `>`) closes the command line. `Up` / `Down` bring back the commands run before.
 
 | Command | Action |
 | --- | --- |
@@ -131,6 +140,17 @@ Press `>` and type a command, then `Enter`. `Esc` (or deleting the `>`) closes t
 | `wq` | Save, then quit |
 | `q!` | Quit without saving |
 | `e name` | Open `name`. A file that doesn't exist yet is created right away, with any missing folders, and shown in the explorer |
+| `e` / `e!` | Read the open file again from disk (`e!` drops unsaved changes; `u` brings them back) |
+| `vsplit` / `vs name` | A new window on the right, with the same file or `name` |
+| `split` / `sp name` | A new window below |
+| `close` / `only` | Close the window (its file stays open) / close every other window |
+| `win 2`, `win left` | Go to a window: its number, or `left` `right` `up` `down` `next` `prev` |
+| `wmove right` | Move the window `left` `right` `up` or `down` |
+| `mkdir name` | Create a folder |
+| `rename name` (or `mv`) | Rename the file or folder selected in the explorer, else the open file; a name with `/` moves it. Never replaces another file |
+| `rm` / `rm name` | Move it to the trash (`rm!` deletes a file, or an empty folder, for good) |
+| `recover` | Bring back unsaved changes kept from a run that ended badly (`recover!` forgets them, `recover all` also those of other folders) |
+| `help` | The keys and commands |
 | `u`, `undo` / `red`, `redo` | Undo / redo |
 | `/text`, `?text` | Search down / up for the exact text (see `/` above) |
 | `s/old/new/` | Replace on the cursor's line (`g` at the end: every match on the line) |
@@ -140,13 +160,32 @@ Press `>` and type a command, then `Enter`. `Esc` (or deleting the `>`) closes t
 | `b name` | Show the open file called `name` (or the only one whose name starts with it) |
 | `bd` | Close the open file (refused while it has unsaved changes; `bd!` closes it anyway) |
 | `ls` | List the open files |
-| `refresh` | Read the folders and the Git status again (like `F5`) |
+| `refresh` | Read the folders, the open files and the Git status again (like `F5`) |
 
 The **active folder** is the folder focused in the explorer (mouse or keyboard), or the folder of the focused file; with nothing focused there, the folder of the open file. After `>e`, the active folder appears as a gray hint (eg. `>e docs/drafts/`): press `Tab` to use it, or just type a name to create the file in the folder Itahi opened instead. The end of the line shows where the file will be created. A path starting with `/` is inside the folder Itahi opened (`>e /test/newFile.txt` creates `test/newFile.txt` there), `~/` is your home folder, anything else is relative. After `>e ` or `>w `, `Tab` completes folder and file names like a shell's `cd`; when several match they are listed under the command line.
 
 **New File** (File tab, or `Ctrl+N`) opens `>e` with the active folder already written in (eg. `>e src/`): type the name and press `Enter`.
 
 An invalid command, or one that can't run, shows an error in red above the command line. Pressing command keys in Edit mode while the explorer or a menu has the focus shows a reminder to press `Esc` first.
+
+### Windows
+
+A file opens in the window that has the focus; the tabs above list every open file. With more than one window each has a title row with its number, and the active one stands out.
+
+The window keys start with a plain `w` in Normal mode (press Esc first in Edit mode): `w v`, `w s`, `w` arrows, ... On the command line `>w` still saves.
+
+| Key | Action |
+| --- | --- |
+| `w` `v` (or `Ctrl+\`, `>vsplit`) | A new window on the right |
+| `w` `s` (or `>split`) | A new window below |
+| `w` arrows or `h` `j` `k` `l` | Go to the window on that side (`w` again: the next one, `1`-`4`: by number) |
+| `Ctrl` + arrows | The same in Normal mode, and on to the explorer or the menu bar |
+| `w` `Alt` + arrows or `H` `J` `K` `L` (or `Shift` + arrows if the terminal passes them on, `Alt+Shift` + arrows, `>wmove`) | Move the window to that side |
+| `w` `c` / `o` (or `>close` / `>only`) | Close the window / all the others |
+| `w` `=`, `<` `>`, `+` `-` | The same size again; narrower, wider; taller, shorter |
+| Mouse | A click gives a window the focus, its `x` closes it, the line between two can be dragged |
+
+There are four windows at most, two columns of two. A split that has no room on the side asked for opens where there is room (and says so). Moving a window: side by side they change places; a window from a column of two joins the other column in the same row; `up` / `down` change places inside a column, or put a window above or below the one beside it.
 
 ### Settings file
 

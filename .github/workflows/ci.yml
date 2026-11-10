@@ -13,6 +13,8 @@ jobs:
         with:
           path: build/_deps
           key: deps-${{ matrix.compiler.cc }}-${{ hashFiles('CMakeLists.txt', 'cmake/**', 'patches/**') }}
+      - name: Terminal emulator for the scenario tests
+        run: pip install pyte
       - name: Configure
         run: cmake -S . -B build
         env: {CC: "${{ matrix.compiler.cc }}", CXX: "${{ matrix.compiler.cxx }}"}

@@ -68,21 +68,37 @@ TEST_CASE("the active folder is offered, a plain name goes to the opened folder"
     fs::create_directories(dir.path / "docs/drafts");
 
     // nothing selected: no folder to offer.
-    active_folder = nullptr;
+    hooks.active_folder = nullptr;
     CHECK(resolve_user_path("notes.txt") == dir.path / "notes.txt");
 
     // a folder selected in the explorer: offered as "docs/" (the ghost after
     // ">e", or written in by New File), but a plain name stays at the top.
     const std::string docs = (dir.path / "docs").string();
-    active_folder = [docs] { return docs; };
+    hooks.active_folder = [docs] { return docs; };
     CHECK(active_folder_for_command() == (dir.path / "docs").lexically_normal().string() + "/");
     CHECK(resolve_user_path("top.txt") == dir.path / "top.txt");
 
-    active_folder = [] { return std::string("./src"); };
-    CHECK(active_folder_for_command() == "src/");   // no leading "./"
-    active_folder = [] { return std::string("."); };
+    // a folder that was deleted by another program isn't offered: the
+    // nearest one above it that is still there.
+    const std::string gone = (dir.path / "docs/drafts/old/older").string();
+    hooks.active_folder = [gone] { return gone; };
+    CHECK(current_new_file_folder() == dir.path / "docs/drafts");
+
+    const fs::path before = fs::current_path();
+    fs::current_path(dir.path);
+    workspace.root = ".";
+    hooks.active_folder = [] { return std::string("./docs"); };
+    CHECK(active_folder_for_command() == "docs/");  // no leading "./"
+    hooks.active_folder = [] { return std::string("."); };
     CHECK(active_folder_for_command().empty());     // the start folder: nothing to offer
 
-    active_folder = nullptr;
+    // however a file is spelled, it is the explorer's "./docs/a.txt".
+    CHECK(explorer_form("docs/a.txt") == fs::path("./docs/a.txt"));
+    CHECK(explorer_form("docs/drafts/../a.txt") == fs::path("./docs/a.txt"));
+    CHECK(explorer_form(fs::current_path() / "docs/a.txt") == fs::path("./docs/a.txt"));
+    CHECK(explorer_form("/somewhere/else.txt") == fs::path("/somewhere/else.txt"));
+    fs::current_path(before);
+
+    hooks.active_folder = nullptr;
     workspace.root = ".";
 }

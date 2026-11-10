@@ -57,6 +57,24 @@ namespace {
                 }};
     }
 
+    // a whole number from `low` to `high`.
+    ConfigEntry integer(const std::string& name, int& value, int low, int high) {
+        return {name,
+                [&value] { return std::to_string(value); },
+                [&value, low, high](const std::string& text) {
+                    if (text.empty() || text.size() > 6 ||
+                        !std::all_of(text.begin(), text.end(), [](unsigned char c) { return std::isdigit(c); })) {
+                        return false;
+                    }
+                    const int n = std::stoi(text);
+                    if (n < low || n > high) {
+                        return false;
+                    }
+                    value = n;
+                    return true;
+                }};
+    }
+
     // one of a few words, stored as its index.
     ConfigEntry choice(const std::string& name, int& value, std::vector<std::string> words) {
         return {name,
@@ -80,6 +98,10 @@ namespace {
             number("tab_size", settings.tab_size, 1, 16),
             flag("tab_inserts_spaces", settings.tab_inserts_spaces),
             choice("scroll_style", settings.scroll_style, {"centered", "free"}),
+            flag("keep_recovery_copies", settings.keep_recovery_copies),
+            flag("auto_reload", settings.auto_reload),
+            flag("search_ignore_case", settings.search_ignore_case),
+            flag("search_whole_word", settings.search_whole_word),
             // View tab
             flag("show_line_numbers", settings.show_line_numbers),
             flag("underline_active_row_on_numbers", settings.underline_active_row_on_numbers),
@@ -89,6 +111,8 @@ namespace {
             flag("word_wrap", settings.word_wrap),
             flag("show_status_bar", settings.show_status_bar),
             flag("show_tabs", settings.show_tabs),
+            // kept between runs
+            integer("explorer_width", settings.explorer_width, min_explorer_width, max_explorer_width),
         };
         return list;
     }

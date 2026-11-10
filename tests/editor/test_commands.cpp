@@ -6,6 +6,9 @@
 #include "editor/undo_history.hpp"
 #include "editor/workspace.hpp"
 
+#include <string>
+#include <vector>
+
 TEST_CASE("command parsing rejects what it doesn't know") {
     CHECK_FALSE(run_command("qw").ok);
     CHECK_FALSE(run_command("w?").ok);
@@ -51,8 +54,8 @@ TEST_CASE("live search: highlight while typing, Enter walks through the matches"
     search_preview("fo", false);                  // while typing: highlights only
     CHECK(search_state().matches.size() == 3);
     CHECK(doc.cursor() == 0);                      // the cursor doesn't move
-    CHECK(search_match_kind(1) == 1);
-    CHECK(search_match_kind(3) == 0);
+    CHECK(search_match_kind(doc, 1) == 1);
+    CHECK(search_match_kind(doc, 3) == 0);
 
     search_preview("foo b", false);               // exact text, spaces included
     CHECK(search_state().matches.size() == 2);
@@ -60,7 +63,7 @@ TEST_CASE("live search: highlight while typing, Enter walks through the matches"
     search_preview("foo", false);
     CHECK(search_step().ok);                       // first Enter: the first match from the cursor
     CHECK(doc.cursor() == 0);
-    CHECK(search_match_kind(0) == 2);              // the current match
+    CHECK(search_match_kind(doc, 0) == 2);              // the current match
     CHECK(search_step().message == "2 of 3");      // Enter again: the next one
     CHECK(doc.cursor() == 8);
     CHECK(search_step().ok);
@@ -75,5 +78,44 @@ TEST_CASE("live search: highlight while typing, Enter walks through the matches"
     CHECK_FALSE(search_step().ok);
 
     search_close();
-    CHECK(search_match_kind(0) == 0);              // no highlights after Esc
+    CHECK(search_match_kind(doc, 0) == 0);              // no highlights after Esc
+}
+
+TEST_CASE("search options: any case, whole words") {
+    const std::string text = "Foo foo FOO food";
+    CHECK(find_matches(text, "foo", false, false).size() == 2);   // "foo" and in "food"
+    CHECK(find_matches(text, "foo", true, false).size() == 4);
+    CHECK(find_matches(text, "foo", true, true).size() == 3);     // not "food"
+    CHECK(find_matches(text, "", true, true).empty());
+
+    workspace.clear();
+    Document& doc = workspace.add("case.txt", text);
+    search_preview("FOO\\c", false);              // like vim: \c ignores case for this search
+    CHECK(search_state().matches.size() == 4);
+    CHECK(search_state().pattern == "FOO");
+    search_preview("FOO", false);
+    CHECK(search_state().matches.size() == 1);
+    search_close();
+    (void)doc;
+}
+
+TEST_CASE("substitute works line by line and reports what it did") {
+    workspace.clear();
+    Document& doc = workspace.add("sub.txt", "a a\nb\na\n");
+    const CommandResult all = run_command("%s/a/x/g");
+    CHECK(all.ok);
+    CHECK(all.message == "Substituted 3 matches");
+    CHECK(doc.text() == "x x\nb\nx\n");
+    CHECK(doc.undo());                               // one step
+    CHECK(doc.text() == "a a\nb\na\n");
+    CHECK_FALSE(run_command("s/(/x/").ok);           // an invalid pattern is an error, not a crash
+}
+
+TEST_CASE("commands run before come back, the same one only once") {
+    command_history.clear();
+    remember_command("w");
+    remember_command("w");
+    remember_command("vsplit");
+    CHECK(command_history == std::vector<std::string>{"w", "vsplit"});
+    CHECK_FALSE(command_help().empty());             // the help screen's list
 }

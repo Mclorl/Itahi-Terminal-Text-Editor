@@ -10,6 +10,7 @@
 
 struct GitStatus {
     bool in_repository = false;
+    std::string top_level;  // the repository's root folder (absolute)
     std::string branch;  // "main"; "HEAD (detached)" when on no branch
     int ahead = 0;       // commits not pushed yet
     int behind = 0;      // commits not pulled yet

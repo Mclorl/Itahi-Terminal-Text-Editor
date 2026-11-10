@@ -51,6 +51,20 @@ inline constexpr int MAX_DIGITS_LENGTH_DEFAULT = 2;
 
 ftxui::Component make_numeric_input_row(std::string& target_var, const std::string& label_text, int max_digits_taken, int max_width);
 
+// --- the rows of the menu pages: every control has a margin around it ---
+
+// a row of a menu page: `inner` with a margin on its left, where a bar shows
+// while the row has the focus, and a dim `hint` (its shortcut) on its right.
+ftxui::Component menu_row(ftxui::Component inner, std::string hint = "");
+// a title above a group of rows, with an empty line above and below it.
+ftxui::Component menu_title(std::string title);
+// an empty line between rows.
+ftxui::Component menu_gap();
+// a page of rows; it scrolls when the rows don't fit.
+ftxui::Component menu_page(ftxui::Components rows);
+// the label in front of a control: the same width on every row.
+ftxui::Element menu_label(const std::string& label);
+
 ftxui::ButtonOption create_plain_button_option_symbol();
 
 ftxui::ButtonOption create_plain_button_option();

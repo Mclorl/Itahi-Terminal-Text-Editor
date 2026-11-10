@@ -18,18 +18,38 @@ extern std::string command_error;
 // the names Tab could complete to, shown under the command line until the
 // next key.
 extern std::vector<std::string> command_completions;
+// the commands run so far, the oldest first: Up / Down in the command line
+// bring them back.
+extern std::vector<std::string> command_history;
+void remember_command(const std::string& command);
 
 // the modes that are available: Normal | Edit | Command. One value, so the
 // modes can never disagree.
 enum class Mode { Normal, Edit, Command };
 extern Mode mode;
 
-// hooks the UI installs (ui/app_view.cpp). Each may be empty.
-extern std::function<void()> request_redraw;            // draw a new frame
-extern std::function<void()> request_quit;              // leave the main loop
-extern std::function<void()> show_editor;               // close any menu, focus the editor
-extern std::function<void()> request_explorer_refresh;  // re-read the folders shown in the explorer
-extern std::function<void()> request_git_refresh;       // ask Git again what changed (after a save, ...)
-// the folder new files go to: the one selected in the explorer (or the folder
-// of the selected file), else the open file's folder, else the opened folder.
-extern std::function<std::string()> active_folder;
+// what the editor asks the UI for (installed by ui/app_view.cpp). Any of them
+// may be empty: there is no UI in the unit tests.
+struct Hooks {
+    std::function<void()> redraw;            // draw a new frame
+    std::function<void()> quit;              // leave the main loop
+    std::function<void()> show_editor;       // close any menu, focus the editor
+    std::function<void()> show_help;         // open the Help tab (>help, F1)
+    std::function<void()> refresh_explorer;  // re-read the folders shown in the explorer
+    std::function<void()> refresh_git;       // ask Git again what changed (after a save, ...)
+    // the folder new files go to: the one selected in the explorer (or the
+    // folder of the selected file), else the open file's folder, else the
+    // opened folder.
+    std::function<std::string()> active_folder;
+    // what a command without a path acts on (>rename, >rm): the row selected
+    // in the explorer while it has the focus, else "" (then: the open file).
+    std::function<std::string()> command_target;
+};
+extern Hooks hooks;
+
+// calls a hook the UI may not have installed.
+inline void call(const std::function<void()>& hook) {
+    if (hook) {
+        hook();
+    }
+}
