@@ -175,7 +175,7 @@ ftxui::Component make_edit_page(std::function<EditorView&()> editor) {
 
 ftxui::Component make_view_page() {
     // the order matches ROW_MARK_WHITE_LINE / ROW_MARK_SHADED / ROW_MARK_TEXT_COLOR.
-    static const std::vector<std::string> row_styles = {"White underline", "Shaded background", "Underline in text color"};
+    static const std::vector<std::string> row_styles = {"Dim underline", "Shaded background", "Underline in text color"};
     static const std::vector<std::string> theme_names = [] {
         std::vector<std::string> list;
         for (const Theme& theme : themes()) {

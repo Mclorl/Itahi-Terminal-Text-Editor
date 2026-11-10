@@ -59,10 +59,6 @@ namespace {
 
     using ftxui::Event;
 
-    // after the folder Ctrl+N makes new files in.
-    const char* const new_files_mark = " +";
-    const int new_files_mark_cells = 2;
-
     struct Row {
         std::string path;
         std::string name;
@@ -71,6 +67,10 @@ namespace {
     };
 
     // writes `text` from column `x` (not past `x_end`); returns the column after it.
+    // after the file in the active window and the folder Ctrl+N makes new files in, focused or not.
+    const char* const active_file_mark = " ●";
+    const int active_file_mark_cells = 2;
+
     int put(ftxui::Screen& screen, int x, int y, int x_end, const std::string& text, ftxui::Color color, bool bold, bool dim) {
         for (const std::string& glyph : ftxui::Utf8ToGlyphs(text)) {
             if (x >= x_end) {
@@ -158,7 +158,6 @@ namespace {
 
             const Theme& theme = current_theme();
             const std::string& open_path = active_path();
-            // where a new file would go: marked with a '+', so Ctrl+N is no surprise.
             const std::string new_files = current_new_file_folder().lexically_normal().string();
             const int bar_x = box.x_max;        // the scroll bar
             const int marks_x = bar_x - 2;      // Git's mark: " M"
@@ -195,19 +194,20 @@ namespace {
                     color = ftxui::Color::Yellow1;
                 }
                 const bool dim = color == ftxui::Color::Default && ignored;
-                const bool takes_new_files = row.folder && fs::path(row.path).lexically_normal().string() == new_files;
+                const bool active = row.folder ? fs::path(row.path).lexically_normal().string() == new_files : row.path == open_path;
+                const bool bold = lit || active;  // stays bold when the explorer isn't focused
 
                 const std::string prefix = row.folder ? (workspace.opened_folders.count(row.path) != 0 ? "v " : "> ") : "  ";
-                // cells after the name: '*' for unsaved, the new-files mark.
-                const int suffix_cells = (!row.folder && unsaved ? 1 : 0) + (takes_new_files ? new_files_mark_cells : 0);
-                x = put(screen, x, y, marks_x, prefix, color, lit, dim);
+                // cells after the name: '*' for unsaved, the active mark.
+                const int suffix_cells = (!row.folder && unsaved ? 1 : 0) + (active ? active_file_mark_cells : 0);
+                x = put(screen, x, y, marks_x, prefix, color, bold, dim);
                 const int room = marks_x - x - suffix_cells;
-                x = put(screen, x, y, marks_x, truncate_name(row.name, room), color, lit, dim);
+                x = put(screen, x, y, marks_x, truncate_name(row.name, room), color, bold, dim);
                 if (!row.folder && unsaved) {
-                    x = put(screen, x, y, marks_x, "*", color, lit, dim);
+                    x = put(screen, x, y, marks_x, "*", color, bold, dim);
                 }
-                if (takes_new_files) {
-                    put(screen, x, y, marks_x, new_files_mark, theme.accent, true, false);
+                if (active) {
+                    put(screen, x, y, marks_x, active_file_mark, theme.accent, true, false);
                 }
                 paint_git_mark(screen, marks_x, y, row);
             }
@@ -439,7 +439,7 @@ ExplorerPanel make_explorer_panel(const fs::path& root, int& width) {
         const bool top_takes_new = current_new_file_folder().lexically_normal() == fs::path(workspace.root).lexically_normal();
         return ftxui::border(ftxui::vbox({
                    ftxui::hbox({ftxui::text(" "), ftxui::bold(ftxui::text("Explorer")),
-                                top_takes_new ? ftxui::bold(ftxui::color(current_theme().accent, ftxui::text(new_files_mark))) : ftxui::text("")}),
+                                top_takes_new ? ftxui::bold(ftxui::color(current_theme().accent, ftxui::text(active_file_mark))) : ftxui::text("")}),
                    ftxui::separator(),
                    view->Render() | ftxui::flex,
                })) |

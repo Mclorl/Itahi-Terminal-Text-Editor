@@ -40,7 +40,7 @@ namespace {
         {"Explorer", "Enter", "Open the file, or open / close the folder"},
         {"Explorer", "Right  /  Left  (l h)", "Open a folder, go into it  /  close it, go to the folder above"},
         {"Explorer", "F2  /  Delete", "Rename  /  move to the trash (asked on the command line first)"},
-        {"Explorer", "+", "Marks the folder Ctrl+N makes new files in: the selected folder, or the folder of the selected file"},
+        {"Explorer", "●", "Marks the file in the active window, and the folder Ctrl+N makes new files in"},
 
         {"Editing", "e  or  i   /   Esc", "Edit mode (type in the file)  /  back to Normal mode"},
         {"Editing", "Arrows, Home, End, Page keys", "Move the cursor; with Shift they select"},

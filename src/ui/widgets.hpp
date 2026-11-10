@@ -40,7 +40,7 @@ ftxui::Element scroll_frame(ftxui::Element child, ScrollState& state);
 void paint_scroll_bar(ftxui::Screen& screen, int x, int y_min, int y_max, int top, int total_rows);
 
 // marks one cell of the cursor's row, the way `mark` (ROW_MARK_*, see
-// editor/settings.hpp) says: a white underline, a `shade` background, or an
+// editor/settings.hpp) says: a dim gray underline, a `shade` background, or an
 // underline in the text's color. `x_min` is the first column of the row.
 void mark_active_row_cell(ftxui::Screen& screen, int x, int y, int x_min, int mark, ftxui::Color shade);
 

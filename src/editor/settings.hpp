@@ -16,7 +16,7 @@ inline constexpr int SCROLL_KEEP_CURSOR_CENTERED = 0;
 inline constexpr int SCROLL_FREELY = 1;
 
 // how the cursor's row is marked when "Show Underline On Active Row" is on.
-//   ROW_MARK_WHITE_LINE  a white underline (the terminal's underline color,
+//   ROW_MARK_WHITE_LINE  a dim gray underline (the terminal's underline color,
 //                        SGR 58; terminals without it underline in the text's color)
 //   ROW_MARK_SHADED      a gray background instead: looks the same in every terminal
 //   ROW_MARK_TEXT_COLOR  an underline in the color of the text above it
