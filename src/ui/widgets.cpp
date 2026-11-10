@@ -168,10 +168,9 @@ void mark_active_row_cell(ftxui::Screen& screen, int x, int y, int x_min, int ma
         return;
     }
     cell.underlined = true;
-    if (mark == ROW_MARK_TEXT_COLOR) {
-        return;
-    }
-    // a dim gray line (256-color 242), so it doesn't outshine the text.
+    // a dim gray line (256-color 242), so it doesn't outshine the text; or,
+    // for ROW_MARK_TEXT_COLOR, the underline color reset (SGR 59), since a
+    // gray one set earlier (another cell, the last frame) would still be on.
     // the terminal draws an underline in the text's color, so on a
     // highlighted line it changes color with every word. Terminals also have
     // a separate underline color (SGR 58), which FTXUI doesn't know about:
@@ -184,7 +183,8 @@ void mark_active_row_cell(ftxui::Screen& screen, int x, int y, int x_min, int ma
     if (second_half || ftxui::string_width(cell.character) == 2) {
         return;
     }
-    cell.character = "\x1B[58;5;242m" + (cell.character.empty() ? std::string(" ") : cell.character);
+    const char* const underline_color = mark == ROW_MARK_TEXT_COLOR ? "\x1B[59m" : "\x1B[58;5;242m";
+    cell.character = underline_color + (cell.character.empty() ? std::string(" ") : cell.character);
 }
 
 ftxui::Element white_vscroll_indicator(ftxui::Element child) {

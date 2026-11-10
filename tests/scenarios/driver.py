@@ -167,6 +167,17 @@ class Editor:
         offset = len(text) - len(text.lstrip())
         return bool(self.screen.buffer[at[1]][at[0] + offset].bold)
 
+    def selected(self, text):
+        """True when the focused explorer has its cursor on the row of `text`:
+        the explorer draws '┃' left of that row only while it has the focus
+        (bold alone isn't enough: the active file and folder stay bold).
+        Every place `text` shows is tried: the menu bar and tabs repeat names."""
+        if not self.shows(text):
+            raise AssertionError(f"{text!r} is not on screen")
+        return any("┃" in line[1:x]
+                   for line in self.lines
+                   for x in [i for i in range(len(line)) if line.startswith(text, i)])
+
     def cursor(self):
         return self.screen.cursor.x, self.screen.cursor.y
 
