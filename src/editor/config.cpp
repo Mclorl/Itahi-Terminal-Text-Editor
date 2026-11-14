@@ -140,12 +140,13 @@ void add_config_entry(ConfigEntry entry) {
     }
 }
 
+// sets the default config path.
 fs::path default_config_path() {
-    const char* xdg = std::getenv("XDG_CONFIG_HOME");
+    const char* xdg = std::getenv("XDG_CONFIG_HOME"); // this is for /home/user/.config
     if (xdg && *xdg) {
         return fs::path(xdg) / "itahi" / "config";
     }
-    const char* home = std::getenv("HOME");
+    const char* home = std::getenv("HOME"); // this is for HOME + /.config
     return fs::path(home && *home ? home : ".") / ".config" / "itahi" / "config";
 }
 

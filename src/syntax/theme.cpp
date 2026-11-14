@@ -153,7 +153,9 @@ void apply_theme(int index) {
 void add_syntax_config_entries() {
     // the theme first: the colors after it may change some of its colors.
     add_config_entry({"theme",
+                        // getters  
                       [] { return std::string(current_theme().name); },
+                        // setters
                       [](const std::string& name) {
                           const auto& list = themes();
                           for (std::size_t i = 0; i < list.size(); ++i) {

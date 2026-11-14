@@ -4,7 +4,7 @@
 #include <string>
 
 bool terminal_shows_underline_color() {
-    const char* term_value = std::getenv("TERM");
+    const char* term_value = std::getenv("TERM"); // get the Terminal type.
     const std::string term = term_value ? term_value : "";
     if (term.empty() || term == "dumb" || term == "linux" || term.rfind("vt", 0) == 0 || term == "cons25") {
         return false;  // consoles and old terminals
